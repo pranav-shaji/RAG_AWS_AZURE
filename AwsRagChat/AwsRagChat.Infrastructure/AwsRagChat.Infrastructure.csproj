@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="AWSSDK.BedrockRuntime" Version="4.0.17.3" />
+		<PackageReference Include="AWSSDK.CognitoIdentityProvider" Version="4.0.8.3" />
+		<PackageReference Include="AWSSDK.Core" Version="4.0.6.1" />
+		<PackageReference Include="AWSSDK.DynamoDBv2" Version="4.0.17.8" />
+		<PackageReference Include="AWSSDK.Extensions.NETCore.Setup" Version="4.0.3.33" />
+		<PackageReference Include="AWSSDK.S3" Version="4.0.21.1" />
+		<PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="10.0.8" />
+		<PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.6" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.6" />
+		<PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.6" />
+		<PackageReference Include="OpenSearch.Client" Version="1.8.0" />
+		<PackageReference Include="OpenSearch.Net" Version="1.8.0" />
+		<PackageReference Include="OpenSearch.Net.Auth.AwsSigV4" Version="1.8.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\AwsRagChat.Application\AwsRagChat.Application.csproj" />
+	</ItemGroup>
+
+</Project>

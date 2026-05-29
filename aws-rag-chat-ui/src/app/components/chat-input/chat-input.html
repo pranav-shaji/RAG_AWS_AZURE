@@ -1,0 +1,52 @@
+<div class="chat-input-wrapper">
+
+  <label class="composer">
+
+    <span class="composer-label">How can I help you today?</span>
+
+    <textarea
+      rows="4"
+      [ngModel]="question"
+      (ngModelChange)="questionChange.emit($event)"
+      (keydown.enter)="onEnter($event)"
+      placeholder="Ask anything">
+    </textarea>
+
+  </label>
+
+  <div class="input-actions">
+
+    <p class="input-hint">
+      {{ helperHint }}
+    </p>
+
+    <button
+      class="send-button"
+      type="button"
+      (click)="askClicked.emit()"
+      [disabled]="loadingAsk || !authenticated || !canSubmit">
+
+      <span>{{ loadingAsk ? 'Thinking' : 'Send' }}</span>
+      <span class="send-icon" aria-hidden="true"></span>
+
+    </button>
+
+  </div>
+
+  <div
+    *ngIf="suggestionPrompts.length"
+    class="suggestion-strip"
+    aria-label="Suggested prompts">
+
+    <button
+      *ngFor="let prompt of suggestionPrompts"
+      type="button"
+      class="suggestion-chip"
+      [disabled]="loadingAsk || !authenticated"
+      (click)="onSuggestionClick(prompt)">
+      {{ prompt }}
+    </button>
+
+  </div>
+
+</div>

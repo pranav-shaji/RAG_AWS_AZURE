@@ -1,0 +1,223 @@
+<div
+  class="message"
+  [class.user-message]="message.role === 'user'"
+  [class.assistant-message]="message.role === 'assistant'">
+
+  <div
+    class="message-avatar"
+    aria-hidden="true">
+
+    {{ message.role === 'user'
+    ? 'Y'
+    : 'AI' }}
+
+  </div>
+
+  <div class="message-main">
+
+    <div class="message-header">
+
+      <strong>
+        {{ message.role === 'user'
+        ? 'You'
+        : 'Assistant' }}
+      </strong>
+
+      <span>
+        {{ message.createdAtUtc | date:'medium' }}
+      </span>
+
+    </div>
+
+    <!-- TEXT -->
+
+    <div
+      *ngIf="message.responseType !== 'table' || !tableData"
+      class="message-content"
+      [innerHTML]="renderedContent">
+    </div>
+
+    <!-- INTERACTIVE OPTIONS -->
+
+    <div
+      *ngIf="message.responseType === 'interactive-options' && options.length"
+      class="option-grid">
+
+      <button
+        *ngFor="let option of options"
+        type="button"
+        class="option-card"
+        (click)="optionSelected.emit(option)">
+
+        <span>{{ option.label }}</span>
+        <small>{{ option.description }}</small>
+
+      </button>
+
+    </div>
+
+    <!-- DOCUMENT SELECTOR -->
+
+    <div
+      *ngIf="message.responseType === 'document-selector'"
+      class="document-selector-list">
+
+      <button
+        *ngFor="let doc of selectorDocuments"
+        type="button"
+        class="document-select-card"
+        [class.selected]="isSelectedDocument(doc.documentId)"
+        (click)="documentSelected.emit(doc)">
+
+        <span>{{ doc.fileName }}</span>
+        <small>{{ doc.status }} | {{ doc.chunkCount || 0 }} chunks</small>
+
+      </button>
+
+      <p
+        *ngIf="!selectorDocuments.length"
+        class="muted">
+        Upload a document to enable document-scoped retrieval.
+      </p>
+
+    </div>
+
+    <!-- CHART -->
+
+    <div
+      *ngIf="message.chartData"
+      class="chart-wrapper">
+
+      <app-pie-chart-message
+        [chartType]="message.responseType || 'pie-chart'"
+        [labels]="message.chartData.labels"
+        [values]="message.chartData.values">
+      </app-pie-chart-message>
+
+    </div>
+
+    <!-- IMAGES -->
+
+    <div
+      *ngIf="message.responseType === 'image' && imageData.length"
+      class="image-grid">
+
+      <a
+        *ngFor="let image of imageData"
+        class="image-card"
+        [href]="image.url"
+        target="_blank"
+        rel="noreferrer">
+
+        <img
+          *ngIf="!isPdfPreview(image)"
+          [src]="$any(image).url"
+          [alt]="$any(image).fileName" />
+
+        <div
+          *ngIf="isPdfPreview(image)"
+          class="pdf-preview-card">
+          <strong>PDF</strong>
+          <small>Open preview</small>
+        </div>
+
+        <span>{{ $any(image).fileName }}</span>
+        <small *ngIf="$any(image).sourceType">{{ $any(image).sourceType }}</small>
+
+      </a>
+
+    </div>
+
+    <!-- TABLE -->
+
+    <div
+      *ngIf="message.responseType === 'table' && tableData as table"
+      class="doc-table">
+
+      <table>
+
+        <thead>
+
+          <tr>
+            <th>#</th>
+            <th *ngFor="let column of table.columns">{{ column }}</th>
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          <tr
+            *ngFor="let row of table.rows; let i = index">
+
+            <td>{{ i + 1 }}</td>
+
+            <td *ngFor="let cell of row">
+              {{ cell }}
+            </td>
+
+          </tr>
+
+        </tbody>
+
+      </table>
+
+    </div>
+
+    <!-- CITATIONS -->
+
+    <div
+      *ngIf="message.citations.length"
+      class="citations">
+
+      <h3>Citations</h3>
+
+      <div
+        *ngFor="let citation of message.citations"
+        class="citation">
+
+        <p>
+
+          <strong>
+            {{ citation.fileName }}
+          </strong>
+
+          <span *ngIf="citation.pageNumber">
+            | Page {{ citation.pageNumber }}
+          </span>
+
+        </p>
+
+      </div>
+
+    </div>
+
+    <button
+      *ngIf="message.role === 'assistant'"
+      type="button"
+      class="copy-answer-button"
+      [class.copied]="copied()"
+      [attr.aria-label]="copied() ? 'Copied answer' : 'Copy answer'"
+      [title]="copied() ? 'Copied' : 'Copy answer'"
+      (click)="copyAssistantAnswer()">
+
+      <svg
+        *ngIf="!copied()"
+        aria-hidden="true"
+        viewBox="0 0 24 24">
+        <path d="M8 7.5V5.75A1.75 1.75 0 0 1 9.75 4h7.5A1.75 1.75 0 0 1 19 5.75v7.5A1.75 1.75 0 0 1 17.25 15H15.5" />
+        <path d="M4.75 8.5h7.5A1.75 1.75 0 0 1 14 10.25v7.5a1.75 1.75 0 0 1-1.75 1.75h-7.5A1.75 1.75 0 0 1 3 17.75v-7.5A1.75 1.75 0 0 1 4.75 8.5Z" />
+      </svg>
+
+      <svg
+        *ngIf="copied()"
+        aria-hidden="true"
+        viewBox="0 0 24 24">
+        <path d="m5 12.5 4.2 4.2L19 6.8" />
+      </svg>
+
+    </button>
+
+  </div>
+
+</div>

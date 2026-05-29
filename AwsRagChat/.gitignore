@@ -1,0 +1,75 @@
+# =========================
+# .NET Build Output
+# =========================
+bin/
+obj/
+out/
+publish/
+artifacts/
+
+# =========================
+# Angular / Node
+# =========================
+node_modules/
+dist/
+.angular/
+coverage/
+
+# =========================
+# Visual Studio
+# =========================
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# =========================
+# JetBrains Rider
+# =========================
+.idea/
+
+# =========================
+# Logs
+# =========================
+*.log
+*.err.log
+
+# =========================
+# Docker / Temp
+# =========================
+*.tmp
+*.temp
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Environment / Secrets
+# =========================
+.env
+.env.*
+appsettings.Development.json
+
+# ======================
+# Local generated files
+# ======================
+
+artifacts/
+*.log
+*.err.log
+
+api-dev-server*
+ui-dev-server*
+
+# Angular
+aws-rag-chat-ui/node_modules/
+aws-rag-chat-ui/dist/
+aws-rag-chat-ui/.angular/
+
+# .NET
+**/bin/
+**/obj/

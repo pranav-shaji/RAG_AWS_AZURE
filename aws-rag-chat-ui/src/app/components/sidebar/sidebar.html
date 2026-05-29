@@ -1,0 +1,110 @@
+<div class="sidebar">
+
+  <div class="sidebar-header">
+
+   <div class="sidebar-brand">
+  <div class="logo-wrapper">
+    <div class="logo-glow"></div>
+    <span class="sidebar-logo" aria-hidden="true">AI</span>
+  </div>
+
+  <div class="brand-text">
+    <h2>RAG Intellect</h2>
+    <span class="brand-badge">Intelligence Engine</span>
+  </div>
+</div>
+
+  </div>
+
+  <nav class="sidebar-nav" aria-label="Workspace navigation">
+
+    <button
+      class="nav-action primary"
+      type="button"
+      (click)="onCreateConversation()"
+      [disabled]="creatingConversation">
+
+      <span class="nav-icon plus-icon" aria-hidden="true"></span>
+      <span>New chat</span>
+
+    </button>
+
+    <div class="nav-action muted-action">
+      <span class="nav-icon search-icon" aria-hidden="true"></span>
+      <span>Search</span>
+    </div>
+
+    <div class="nav-action">
+      <span class="nav-icon chat-icon" aria-hidden="true"></span>
+      <span>Chats</span>
+    </div>
+
+  </nav>
+
+  <p class="sidebar-kicker">
+    Recents
+  </p>
+
+  <p
+    *ngIf="loadingSessions"
+    class="muted loading-line">
+
+    Loading conversations...
+
+  </p>
+
+  <p
+    *ngIf="!loadingSessions && sessions.length === 0"
+    class="muted empty-state">
+
+    No conversations yet.
+
+  </p>
+
+  <!-- SCROLLABLE SESSION AREA -->
+
+  <div class="session-list">
+
+    <div
+      *ngFor="
+        let session of sessions;
+        trackBy: trackSession
+      "
+      class="session-button"
+      role="button"
+      tabindex="0"
+      [class.active]="
+        session.sessionId === activeSessionId
+      "
+      (click)="
+        onSelectConversation(session.sessionId)
+      "
+      (keydown.enter)="
+        onSelectConversation(session.sessionId)
+      ">
+
+      <span class="session-row">
+
+        <span class="session-title">
+          {{ session.title || 'New chat' }}
+        </span>
+
+        <button
+          type="button"
+          class="delete-session"
+          aria-label="Delete conversation"
+          (click)="onDeleteConversation($event, session)">
+          <span aria-hidden="true"></span>
+        </button>
+
+      </span>
+
+      <span class="session-meta">
+        {{ session.messageCount }} messages
+      </span>
+
+    </div>
+
+  </div>
+
+</div>

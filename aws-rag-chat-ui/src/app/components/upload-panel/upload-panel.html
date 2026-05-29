@@ -1,0 +1,102 @@
+<section class="card upload-card">
+
+  <div class="panel-heading">
+
+    <div>
+
+      <p class="panel-kicker">
+        Knowledge
+      </p>
+
+      <h2>Upload document</h2>
+
+    </div>
+
+  </div>
+
+  <label
+    for="documentFile"
+    class="upload-zone">
+
+    <span class="upload-icon" aria-hidden="true"></span>
+
+    <span class="upload-copy">
+      Choose document
+      <small>PDF, text, CSV, and supported knowledge files</small>
+    </span>
+
+    <input
+      #documentFileInput
+      id="documentFile"
+      type="file"
+      [disabled]="!authenticated || loadingUpload"
+      (change)="fileSelected.emit($event)" />
+
+  </label>
+
+  <button
+    type="button"
+    class="upload-button"
+    (click)="uploadClicked.emit()"
+    [disabled]="loadingUpload || !authenticated || !selectedFileName || allowedRoles.length === 0">
+
+    {{ loadingUpload ? 'Uploading...' : 'Upload document' }}
+
+  </button>
+
+  <p
+    *ngIf="selectedFileName"
+    class="selected-file">
+
+    Selected file:
+    <strong>{{ selectedFileName }}</strong>
+
+    <button
+      type="button"
+      class="clear-file-button"
+      title="Remove selected file"
+      aria-label="Remove selected file"
+      [disabled]="loadingUpload"
+      (click)="clearSelectedFile(documentFileInput)">
+      <span aria-hidden="true">×</span>
+    </button>
+
+  </p>
+
+  <div class="role-picker">
+
+    <p class="role-picker-label">
+      Visible to
+    </p>
+
+    <label class="role-option">
+      <input
+        type="checkbox"
+        [checked]="allRolesSelected()"
+        [disabled]="!authenticated || loadingUpload"
+        (change)="selectAllRolesToggled.emit()" />
+      Select All
+    </label>
+
+    <label
+      *ngFor="let role of roleOptions"
+      class="role-option">
+      <input
+        type="checkbox"
+        [checked]="isRoleSelected(role)"
+        [disabled]="!authenticated || loadingUpload"
+        (change)="roleToggled.emit(role)" />
+      {{ role }}
+    </label>
+
+  </div>
+
+  <p
+    *ngIf="uploadMessage"
+    class="success">
+
+    {{ uploadMessage }}
+
+  </p>
+
+</section>

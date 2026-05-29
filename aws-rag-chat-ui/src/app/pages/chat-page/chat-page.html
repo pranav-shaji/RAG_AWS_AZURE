@@ -1,0 +1,324 @@
+<div class="chat-page">
+
+  <!-- TOPBAR -->
+
+  <header class="topbar">
+
+    <div class="brand-block">
+
+      <div
+        class="brand-mark"
+        aria-hidden="true">
+        AI
+      </div>
+
+      <div>
+
+        <p class="eyebrow">
+          Enterprise RAG workspace
+        </p>
+
+        <h1>RAG Intellect AI</h1>
+
+        <p class="subtitle">
+          Secure document intelligence with chat, citations, and document workflows.
+        </p>
+
+      </div>
+
+    </div>
+
+    <div class="auth-panel">
+
+      <ng-container *ngIf="auth.isAuthenticated(); else loggedOut">
+
+        <p class="auth-user">
+          <span class="status-dot"></span>
+          Signed in
+          <strong>{{ auth.userEmail() || auth.userId() }}</strong>
+          <span
+            *ngIf="auth.role()"
+            class="role-pill">
+            {{ auth.role() }}
+          </span>
+        </p>
+
+        <a
+          *ngIf="auth.isAdmin()"
+          class="admin-link"
+          routerLink="/admin">
+          Admin Dashboard
+        </a>
+
+        <button
+          class="secondary-button"
+          type="button"
+          (click)="logout()">
+
+          Sign out
+
+        </button>
+
+      </ng-container>
+
+      <ng-template #loggedOut>
+
+        <button
+          type="button"
+          (click)="login()">
+
+          Login with Cognito
+
+        </button>
+
+      </ng-template>
+
+    </div>
+
+  </header>
+
+  <!-- ERROR -->
+
+  <p
+    *ngIf="errorMessage()"
+    class="page-alert"
+    role="alert">
+
+    {{ errorMessage() }}
+
+  </p>
+
+  <!-- MAIN LAYOUT -->
+
+  <main
+    class="chat-shell"
+    [class.sidebar-collapsed]="sidebarCollapsed()">
+
+    <button
+      type="button"
+      class="sidebar-toggle"
+      [class.collapsed]="sidebarCollapsed()"
+      [attr.aria-label]="sidebarCollapsed() ? 'Open sidebar' : 'Collapse sidebar'"
+      [attr.aria-expanded]="!sidebarCollapsed()"
+      [title]="sidebarCollapsed() ? 'Open sidebar' : 'Collapse sidebar'"
+      (click)="toggleSidebar()">
+      <span aria-hidden="true"></span>
+    </button>
+
+    <!-- SIDEBAR -->
+
+    <aside
+      class="conversation-panel"
+      [attr.aria-hidden]="sidebarCollapsed()">
+
+      <app-sidebar
+
+        [sessions]="sessions()"
+
+        [activeSessionId]="activeSessionId()"
+
+        [loadingSessions]="loadingSessions()"
+
+        [creatingConversation]="creatingConversation()"
+
+        (createConversation)="createNewConversation()"
+
+        (conversationSelected)="selectConversation($event)"
+
+        (conversationDeleteRequested)="openDeleteConversationDialog($event)">
+
+      </app-sidebar>
+
+    </aside>
+
+    <!-- MAIN CONTENT -->
+
+    <section class="workspace-panel">
+
+      <!-- TOP PANELS -->
+
+      <app-upload-panel
+        *ngIf="auth.isAdmin()"
+
+        [selectedFileName]="selectedFileName()"
+
+        [loadingUpload]="loadingUpload()"
+
+        [uploadMessage]="uploadMessage()"
+
+        [authenticated]="auth.isAuthenticated()"
+
+        [allowedRoles]="allowedUploadRoles()"
+
+        (fileSelected)="onFileSelected($event)"
+
+        (fileCleared)="clearSelectedFile()"
+
+        (roleToggled)="toggleUploadRole($event)"
+
+        (selectAllRolesToggled)="toggleAllUploadRoles()"
+
+        (uploadClicked)="upload()">
+
+      </app-upload-panel>
+
+      <!-- CHAT -->
+
+      <section class="chat-panel">
+
+        <div class="chat-heading">
+
+          <div>
+
+            <p class="panel-kicker">
+              Assistant
+            </p>
+
+            <h2>Chat</h2>
+
+          </div>
+
+          <span class="chat-status">
+
+  Enterprise knowledge search
+
+</span>
+
+        </div>
+
+        <!-- MESSAGES -->
+
+        <div
+          class="messages"
+          #messagesContainer>
+
+          <p
+            *ngIf="loadingMessages()"
+            class="messages-loading">
+            Loading messages...
+          </p>
+
+          <div
+            *ngIf="!loadingMessages() && messages().length === 0"
+            class="empty-chat-state">
+            <strong>RAG Intellect AI</strong>
+            <span>Ask about your enterprise knowledge base, documents, and cited answers.</span>
+          </div>
+
+          <app-message-item
+
+            *ngFor="
+              let message of messages();
+              trackBy: trackMessage
+            "
+
+            [message]="message"
+
+            [renderedContent]="
+              renderMessageContent(message.content)
+            "
+
+            (optionSelected)="handleInteractiveOption($event)"
+
+            (documentSelected)="selectDocumentFromChat($event)">
+
+          </app-message-item>
+
+        </div>
+
+        <!-- TYPING -->
+
+        <div
+          *ngIf="assistantTyping() && pendingAskSessionId() === activeSessionId()"
+          class="typing-indicator">
+
+          <span></span>
+          <span></span>
+          <span></span>
+
+        </div>
+
+        <!-- CHAT INPUT -->
+
+        <app-chat-input
+
+          [question]="question()"
+
+          [loadingAsk]="loadingAsk()"
+
+          [authenticated]="auth.isAuthenticated()"
+
+          [canSubmit]="!!question().trim() && !loadingAsk() && !creatingConversation()"
+
+          [suggestionPrompts]="suggestionPrompts()"
+
+          [helperHint]="inputHint()"
+
+          (questionChange)="question.set($event)"
+
+          (suggestionSelected)="selectSuggestion($event)"
+
+          (askClicked)="ask()">
+
+        </app-chat-input>
+
+      </section>
+
+    </section>
+
+  </main>
+
+  <div
+    *ngIf="deleteCandidate() as session"
+    class="delete-overlay"
+    role="presentation"
+    (click)="cancelDeleteConversation()">
+
+    <section
+      class="delete-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-dialog-title"
+      (click)="$event.stopPropagation()">
+
+      <div class="delete-dialog-icon" aria-hidden="true">
+        <span></span>
+      </div>
+
+      <div class="delete-dialog-copy">
+
+        <h2 id="delete-dialog-title">
+          Delete conversation?
+        </h2>
+
+        <p>
+          "{{ session.title || 'New chat' }}" will be removed from your chat history.
+        </p>
+
+      </div>
+
+      <div class="delete-dialog-actions">
+
+        <button
+          type="button"
+          class="dialog-button ghost-button"
+          [disabled]="!!deletingSessionId()"
+          (click)="cancelDeleteConversation()">
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          class="dialog-button danger-button"
+          [disabled]="!!deletingSessionId()"
+          (click)="confirmDeleteConversation()">
+          {{ deletingSessionId() ? 'Deleting...' : 'Delete' }}
+        </button>
+
+      </div>
+
+    </section>
+
+  </div>
+
+</div>

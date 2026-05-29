@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="AwsRagChat.Api/AwsRagChat.Api.csproj" />
+  <Project Path="AwsRagChat.Application/AwsRagChat.Application.csproj" />
+  <Project Path="AwsRagChat.Domain/AwsRagChat.Domain.csproj" />
+  <Project Path="AwsRagChat.Infrastructure/AwsRagChat.Infrastructure.csproj" />
+  <Project Path="AwsRagChat.Ingestion/AwsRagChat.Ingestion.csproj" />
+</Solution>

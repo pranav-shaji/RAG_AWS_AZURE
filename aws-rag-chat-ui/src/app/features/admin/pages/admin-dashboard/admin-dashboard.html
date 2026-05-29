@@ -1,0 +1,365 @@
+<div class="admin-dashboard">
+
+  <div class="dashboard-header">
+
+    <div>
+      <p class="dashboard-kicker">
+        Enterprise Administration
+      </p>
+
+      <h1>
+        Admin Dashboard
+      </h1>
+    </div>
+
+    <div class="dashboard-actions">
+      <a
+        class="ghost-link"
+        routerLink="/">
+        Assistant Chat
+      </a>
+
+      <button
+        type="button"
+        [disabled]="loading()"
+        (click)="loadDashboard()">
+        {{ loading() ? 'Refreshing...' : 'Refresh' }}
+      </button>
+    </div>
+
+  </div>
+
+  @if (loadingStats()) {
+
+    <div class="dashboard-loading">
+
+      Loading admin analytics...
+
+    </div>
+  }
+
+  @if (error()) {
+
+    <div class="dashboard-error">
+
+      {{ error() }}
+
+    </div>
+  }
+
+  @if (stats(); as dashboard) {
+
+    <div class="stats-grid">
+
+      <div class="stats-card">
+
+        <p class="stats-label">
+          Total Documents
+        </p>
+
+        <h2>
+          {{ dashboard.totalDocuments }}
+        </h2>
+
+      </div>
+
+      <div class="stats-card">
+
+        <p class="stats-label">
+          Indexed Documents
+        </p>
+
+        <h2>
+          {{ dashboard.indexedDocuments }}
+        </h2>
+
+      </div>
+
+      <div class="stats-card">
+
+        <p class="stats-label">
+          Failed Documents
+        </p>
+
+        <h2>
+          {{ dashboard.failedDocuments }}
+        </h2>
+
+      </div>
+
+      <div class="stats-card">
+
+        <p class="stats-label">
+          Processing Documents
+        </p>
+
+        <h2>
+          {{ dashboard.processingDocuments }}
+        </h2>
+
+      </div>
+
+      <div class="stats-card">
+
+        <p class="stats-label">
+          Total Chunks
+        </p>
+
+        <h2>
+          {{ dashboard.totalChunks }}
+        </h2>
+
+      </div>
+
+    </div>
+
+  }
+
+  @if (ingestion(); as ingestionStatus) {
+    <section class="dashboard-section">
+      <div class="section-header">
+        <h2>Ingestion Status</h2>
+        <span>{{ ingestionStatus.generatedAtUtc | date:'medium' }}</span>
+      </div>
+
+      <div class="stats-grid compact">
+        <div class="stats-card">
+          <p class="stats-label">Uploaded</p>
+          <h2>{{ ingestionStatus.uploaded }}</h2>
+        </div>
+
+        <div class="stats-card">
+          <p class="stats-label">Indexed</p>
+          <h2>{{ ingestionStatus.indexed }}</h2>
+        </div>
+
+        <div class="stats-card">
+          <p class="stats-label">Processing</p>
+          <h2>{{ ingestionStatus.processing }}</h2>
+        </div>
+
+        <div class="stats-card">
+          <p class="stats-label">Failed</p>
+          <h2>{{ ingestionStatus.failed }}</h2>
+        </div>
+      </div>
+    </section>
+  }
+
+  <section class="dashboard-section">
+    <div class="section-header">
+      <div>
+        <p class="section-kicker">Access control</p>
+        <h2>User Management</h2>
+      </div>
+    </div>
+
+    <div class="admin-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>Approval Status</th>
+            <th>Role</th>
+            <th>Created At</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          @if (loadingUsers()) {
+            <tr>
+              <td colspan="5">
+                <div class="table-loading">
+                  Loading enterprise users...
+                </div>
+              </td>
+            </tr>
+          } @else {
+          @for (user of users(); track user.userId) {
+            <tr>
+              <td>
+                <span class="user-cell">
+                  <strong>{{ user.email || 'Email unavailable' }}</strong>
+                </span>
+              </td>
+              <td>
+                <span [class]="statusBadgeClass(user.approvalStatus)">
+                  <span class="status-dot"></span>
+                  {{ user.approvalStatus }}
+                </span>
+              </td>
+              <td>
+                @if (user.approvalStatus !== 'Approved' || editingUserRoles()[user.userId]) {
+                  <select
+                    [ngModel]="selectedUserRoles()[user.userId] || user.approvedRole || 'User'"
+                    (ngModelChange)="setSelectedUserRole(user.userId, $event)">
+                    @for (role of roleOptions; track role) {
+                      <option [value]="role">{{ role }}</option>
+                    }
+                  </select>
+                } @else {
+                  <span [class]="roleBadgeClass(user.approvedRole)">
+                    {{ user.approvedRole || 'Not assigned' }}
+                  </span>
+                }
+              </td>
+              <td>{{ user.createdAtUtc | date:'short' }}</td>
+              <td>
+                <div class="action-row">
+                @if (user.approvalStatus === 'Approved' && !editingUserRoles()[user.userId]) {
+                  <button
+                    type="button"
+                    class="table-action secondary-action"
+                    (click)="editUserRole(user)">
+                    Edit Role
+                  </button>
+                } @else {
+                  <button
+                    type="button"
+                    class="table-action primary-action"
+                    (click)="approveUser(user)">
+                    {{ user.approvalStatus === 'Approved' ? 'Save' : 'Approve' }}
+                  </button>
+
+                  @if (user.approvalStatus === 'Approved') {
+                    <button
+                      type="button"
+                      class="table-action ghost-action"
+                      (click)="cancelEditUserRole(user)">
+                      Cancel
+                    </button>
+                  }
+                }
+                </div>
+              </td>
+            </tr>
+          } @empty {
+            <tr>
+              <td colspan="5">No users found.</td>
+            </tr>
+          }
+          }
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="dashboard-section">
+    <div class="section-header">
+      <div>
+        <p class="section-kicker">Knowledge base</p>
+        <h2>Uploaded Documents</h2>
+      </div>
+    </div>
+
+    <div class="table-toolbar">
+      <label>
+        <span>Search files</span>
+        <input
+          type="search"
+          [ngModel]="documentSearch()"
+          (ngModelChange)="documentSearch.set($event)"
+          placeholder="Search by file name" />
+      </label>
+    </div>
+
+    <div class="admin-table">
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Status</th>
+            <th>Roles</th>
+            <th>Pages</th>
+            <th>Chunks</th>
+            <th>Updated</th>
+            <th>Preview</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          @if (loadingDocuments()) {
+            <tr>
+              <td colspan="7">
+                <div class="table-loading">
+                  Loading uploaded documents...
+                </div>
+              </td>
+            </tr>
+          } @else {
+          @for (document of filteredDocuments(); track document.documentId) {
+            <tr>
+              <td>
+                <span class="file-cell">
+                  {{ document.fileName }}
+                </span>
+              </td>
+              <td>
+                <span [class]="statusBadgeClass(document.status)">
+                  <span class="status-dot"></span>
+                  {{ document.status }}
+                </span>
+              </td>
+              <td>
+                <div class="role-list">
+                  @for (role of roleList(document); track role) {
+                    <span [class]="roleBadgeClass(role)">
+                      {{ role }}
+                    </span>
+                  } @empty {
+                    <span class="muted-text">Not set</span>
+                  }
+                </div>
+              </td>
+              <td>{{ formatPageCount(document.pageCount) }}</td>
+              <td>{{ document.chunkCount }}</td>
+              <td>{{ document.updatedAtUtc | date:'short' }}</td>
+              <td>
+                <button
+                  type="button"
+                  class="icon-button"
+                  title="Preview file"
+                  aria-label="Preview file"
+                  (click)="openDocumentPreview(document)">
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24">
+                    <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                    <path d="M12 9.25a2.75 2.75 0 1 1 0 5.5 2.75 2.75 0 0 1 0-5.5Z" />
+                  </svg>
+                </button>
+              </td>
+            </tr>
+          } @empty {
+            <tr>
+              <td colspan="7">No documents found.</td>
+            </tr>
+          }
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <div class="pagination-controls">
+      <button
+        type="button"
+        [disabled]="loadingDocuments() || documentPageIndex() === 0"
+        (click)="loadPreviousDocumentPage()">
+        Previous
+      </button>
+
+      <span>
+        Page {{ documentPageIndex() + 1 }}
+      </span>
+
+      <button
+        type="button"
+        [disabled]="loadingDocuments() || !documentNextToken()"
+        (click)="loadNextDocumentPage()">
+        Next
+      </button>
+    </div>
+  </section>
+
+</div>
