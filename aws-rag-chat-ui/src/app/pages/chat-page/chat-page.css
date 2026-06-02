@@ -78,6 +78,10 @@
   grid-template-columns: 0 minmax(0, 1fr);
 }
 
+.chat-shell.logged-out-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .conversation-panel,
 .workspace-panel,
 .chat-panel {
@@ -196,6 +200,34 @@
 
 .sidebar-collapsed .workspace-panel {
   padding-inline: clamp(18px, 5vw, 64px);
+}
+
+.logged-out-shell .workspace-panel {
+  justify-content: center;
+  padding: 24px;
+  background: #ffffff;
+}
+
+.logged-out-shell .chat-panel {
+  flex: 0 1 auto;
+}
+
+.logged-out-shell .messages {
+  justify-content: center;
+  overflow: hidden;
+  padding: 0;
+}
+
+.logged-out-shell .empty-chat-state {
+  width: min(520px, 100%);
+  margin-top: 0;
+}
+
+.logged-out-login-button {
+  justify-self: center;
+  width: auto;
+  min-width: 190px;
+  margin-top: 8px;
 }
 
 .document-toolbar {

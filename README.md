@@ -306,6 +306,7 @@ npm run build
 - CORS errors: add the exact frontend origin to `Cors:AllowedOrigins`.
 - Upload succeeds but asking says the document is not searchable: wait until document status is `INDEXED`; check Lambda, Textract, Bedrock, DynamoDB, and OpenSearch logs if it remains stuck.
 - `INDEXED` with zero chunks: the file likely had no extractable text or extraction failed before chunk creation.
+- Scanned PDFs require a second Lambda/SQS completion path for Textract async OCR. Configure the completion Lambda handler as `AwsRagChat.Ingestion::AwsRagChat.Ingestion.Handlers.TextractCompletionFunction::FunctionHandler` and connect the Textract SNS topic to SQS, then SQS to that Lambda.
 - Single-document answers cite other files: confirm Global Search is off and the selected document id is correct.
 - Global search misses content: check OpenSearch health, vector dimension, data access policy, and DynamoDB chunk fallback logs.
 - Exact headings are missed: check ingestion logs for chunk previews and confirm the heading appears in `Heading`, `Section`, and chunk `Text`.

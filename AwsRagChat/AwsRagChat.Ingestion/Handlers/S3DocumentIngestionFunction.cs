@@ -4,6 +4,7 @@ using Amazon.Lambda.Core;
 using Amazon.Lambda.S3Events;
 using Amazon.S3;
 using Amazon.Textract;
+using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Ingestion.Options;
 using AwsRagChat.Ingestion.Services;
 using AwsRagChat.Infrastructure.Services;
@@ -17,11 +18,8 @@ public sealed class S3DocumentIngestionFunction
     private readonly TextExtractionService _textExtractionService;
     private readonly TextractTextExtractionService _textractTextExtractionService;
     private readonly TextractAsyncExtractionService _textractAsyncExtractionService;
-    private readonly ChunkingService _chunkingService;
-    private readonly EmbeddingBatchService _embeddingBatchService;
-    private readonly ChunkPersistenceService _chunkPersistenceService;
     private readonly DocumentStatusService _documentStatusService;
-    private readonly OpenSearchService _openSearchService;
+    private readonly DocumentIngestionPipeline _documentIngestionPipeline;
 
     public S3DocumentIngestionFunction()
     {
@@ -48,13 +46,23 @@ public sealed class S3DocumentIngestionFunction
         _textExtractionService = new TextExtractionService();
         _textractTextExtractionService = new TextractTextExtractionService(textract);
         _textractAsyncExtractionService = new TextractAsyncExtractionService(textract, textractAsyncOptions);
-        _chunkingService = new ChunkingService();
-        _embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions);
-        _chunkPersistenceService = new ChunkPersistenceService(dynamoDb, dynamoDbOptions);
+
+        var chunkingService = new ChunkingService();
+        var embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions);
+        var chunkPersistenceService = new ChunkPersistenceService(dynamoDb, dynamoDbOptions);
+
         _documentStatusService = new DocumentStatusService(
             dynamoDb,
             configuration["DynamoDb:DocumentsTableName"] ?? "rag-documents");
-        _openSearchService = new OpenSearchService(configuration);
+
+        var openSearchService = new OpenSearchService(configuration);
+
+        _documentIngestionPipeline = new DocumentIngestionPipeline(
+            chunkingService,
+            embeddingBatchService,
+            chunkPersistenceService,
+            _documentStatusService,
+            openSearchService);
     }
 
     public async Task FunctionHandler(S3Event s3Event, ILambdaContext context)
@@ -152,13 +160,17 @@ public sealed class S3DocumentIngestionFunction
                     throw new NotSupportedException($"File type '{Path.GetExtension(fileName)}' is not supported.");
                 }
 
-                await ProcessExtractedDocumentAsync(
+                await _documentIngestionPipeline.ProcessExtractedDocumentAsync(
+                    new IngestionDocumentRequest
+                    {
+                        DocumentId = documentId,
+                        OwnerUserId = ownerUserId,
+                        FileName = fileName,
+                        ObjectKey = objectKey,
+                        EmptyTextErrorMessage = "No extractable text found."
+                    },
                     extracted,
-                    documentId,
-                    ownerUserId,
-                    fileName,
-                    objectKey,
-                    context,
+                    context.Logger.LogLine,
                     CancellationToken.None);
             }
             catch (Exception ex)
@@ -176,121 +188,6 @@ public sealed class S3DocumentIngestionFunction
         }
     }
 
-    private async Task ProcessExtractedDocumentAsync(
-        ExtractedDocument extractedDocument,
-        string documentId,
-        string ownerUserId,
-        string fileName,
-        string objectKey,
-        ILambdaContext context,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(extractedDocument?.FullText))
-        {
-            context.Logger.LogLine("No text extracted.");
-
-            await _documentStatusService.MarkFailedAsync(
-                documentId,
-                ownerUserId,
-                fileName,
-                objectKey,
-                "No extractable text found.",
-                cancellationToken);
-
-            return;
-        }
-
-        var chunks = _chunkingService.CreateChunks(
-            documentId,
-            fileName,
-            objectKey,
-            extractedDocument);
-
-        var isAdminDocument = await _documentStatusService.GetIsAdminDocumentAsync(
-            documentId,
-            cancellationToken);
-
-        var allowedRoles = await _documentStatusService.GetAllowedRolesAsync(
-            documentId,
-            cancellationToken);
-
-        foreach (var chunk in chunks)
-        {
-            chunk.OwnerUserId = ownerUserId;
-            chunk.IsAdminDocument = isAdminDocument;
-            chunk.AllowedRoles = allowedRoles;
-        }
-
-        context.Logger.LogLine($"Created {chunks.Count} chunks.");
-
-        foreach (var chunk in chunks.Take(5))
-        {
-            context.Logger.LogLine(
-                $"Chunk preview. Order: {chunk.ChunkOrder}, Page: {chunk.PageNumber}, Heading: {chunk.Heading}, Length: {chunk.Text.Length}, Text: {TrimForLog(chunk.Text, 260)}");
-        }
-
-        await _documentStatusService.MarkOcrCompletedAsync(
-            documentId,
-            ownerUserId,
-            fileName,
-            objectKey,
-            string.Empty,
-            chunks.Count,
-            extractedDocument.PageCount,
-            cancellationToken);
-
-        await _documentStatusService.MarkEmbeddingStartedAsync(
-            documentId,
-            ownerUserId,
-            fileName,
-            objectKey,
-            cancellationToken);
-
-        context.Logger.LogLine("Generating embeddings.");
-
-        await _embeddingBatchService.AddEmbeddingsAsync(
-            chunks,
-            cancellationToken);
-
-        context.Logger.LogLine(
-            $"Generated embeddings. ChunkCount: {chunks.Count}, Dimensions: {(chunks.Count > 0 ? chunks[0].Embedding.Count : 0)}");
-
-        context.Logger.LogLine("Saving chunks to DynamoDB.");
-
-        await _chunkPersistenceService.SaveChunksAsync(
-            chunks,
-            cancellationToken);
-
-        await _documentStatusService.MarkIndexingStartedAsync(
-            documentId,
-            ownerUserId,
-            fileName,
-            objectKey,
-            cancellationToken);
-
-        context.Logger.LogLine("Indexing chunks into OpenSearch.");
-
-        foreach (var chunk in chunks)
-        {
-            context.Logger.LogLine(
-                $"Indexing chunk. DocumentId: {chunk.DocumentId}, ChunkId: {chunk.ChunkId}, OwnerUserId: {chunk.OwnerUserId}, TextLength: {chunk.Text?.Length ?? 0}");
-
-            await _openSearchService.IndexDocumentAsync(chunk);
-        }
-
-        await _documentStatusService.MarkIndexedAsync(
-            documentId,
-            ownerUserId,
-            fileName,
-            objectKey,
-            chunks.Count,
-            extractedDocument.PageCount,
-            cancellationToken);
-
-        context.Logger.LogLine(
-            $"SUCCESS: {chunks.Count} chunks across {extractedDocument.PageCount} pages processed and indexed for document {documentId}.");
-    }
-
     private static string TryExtractOwnerUserId(string objectKey)
     {
         var parts = objectKey.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -303,15 +200,4 @@ public sealed class S3DocumentIngestionFunction
         return parts.Length >= 4 ? parts[2] : string.Empty;
     }
 
-    private static string TrimForLog(string text, int maxLength)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return string.Empty;
-
-        var normalized = string.Join(" ", text.Split(['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-
-        return normalized.Length <= maxLength
-            ? normalized
-            : normalized[..maxLength] + "...";
-    }
 }

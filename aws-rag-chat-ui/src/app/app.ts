@@ -1,11 +1,18 @@
-import { Component } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
+import { Auth } from './auth';
 
 @Component({
   selector: 'app-root',
   standalone: true,
   imports: [RouterOutlet],
-  template: `<router-outlet />`
+  templateUrl: './app.html',
+  styleUrl: './app.css'
 })
 export class App {
+  readonly auth = inject(Auth);
+
+  login(): void {
+    this.auth.login();
+  }
 }

@@ -2,7 +2,9 @@
 
   <!-- TOPBAR -->
 
-  <header class="topbar">
+  <header
+    *ngIf="auth.isAuthenticated()"
+    class="topbar">
 
     <div class="brand-block">
 
@@ -29,8 +31,6 @@
     </div>
 
     <div class="auth-panel">
-
-      <ng-container *ngIf="auth.isAuthenticated(); else loggedOut">
 
         <p class="auth-user">
           <span class="status-dot"></span>
@@ -59,20 +59,6 @@
 
         </button>
 
-      </ng-container>
-
-      <ng-template #loggedOut>
-
-        <button
-          type="button"
-          (click)="login()">
-
-          Login with Cognito
-
-        </button>
-
-      </ng-template>
-
     </div>
 
   </header>
@@ -92,9 +78,11 @@
 
   <main
     class="chat-shell"
-    [class.sidebar-collapsed]="sidebarCollapsed()">
+    [class.sidebar-collapsed]="sidebarCollapsed()"
+    [class.logged-out-shell]="!auth.isAuthenticated()">
 
     <button
+      *ngIf="auth.isAuthenticated()"
       type="button"
       class="sidebar-toggle"
       [class.collapsed]="sidebarCollapsed()"
@@ -108,6 +96,7 @@
     <!-- SIDEBAR -->
 
     <aside
+      *ngIf="auth.isAuthenticated()"
       class="conversation-panel"
       [attr.aria-hidden]="sidebarCollapsed()">
 
@@ -166,7 +155,9 @@
 
       <section class="chat-panel">
 
-        <div class="chat-heading">
+        <div
+          *ngIf="auth.isAuthenticated()"
+          class="chat-heading">
 
           <div>
 
@@ -203,33 +194,42 @@
             class="empty-chat-state">
             <strong>RAG Intellect AI</strong>
             <span>Ask about your enterprise knowledge base, documents, and cited answers.</span>
+            <button
+              *ngIf="!auth.isAuthenticated()"
+              class="logged-out-login-button"
+              type="button"
+              (click)="login()">
+              Login with Cognito
+            </button>
           </div>
 
-          <app-message-item
+          <ng-container *ngIf="auth.isAuthenticated()">
+            <app-message-item
 
-            *ngFor="
-              let message of messages();
-              trackBy: trackMessage
-            "
+              *ngFor="
+                let message of messages();
+                trackBy: trackMessage
+              "
 
-            [message]="message"
+              [message]="message"
 
-            [renderedContent]="
-              renderMessageContent(message.content)
-            "
+              [renderedContent]="
+                renderMessageContent(message.content)
+              "
 
-            (optionSelected)="handleInteractiveOption($event)"
+              (optionSelected)="handleInteractiveOption($event)"
 
-            (documentSelected)="selectDocumentFromChat($event)">
+              (documentSelected)="selectDocumentFromChat($event)">
 
-          </app-message-item>
+            </app-message-item>
+          </ng-container>
 
         </div>
 
         <!-- TYPING -->
 
         <div
-          *ngIf="assistantTyping() && pendingAskSessionId() === activeSessionId()"
+          *ngIf="auth.isAuthenticated() && assistantTyping() && pendingAskSessionId() === activeSessionId()"
           class="typing-indicator">
 
           <span></span>
@@ -241,6 +241,7 @@
         <!-- CHAT INPUT -->
 
         <app-chat-input
+          *ngIf="auth.isAuthenticated()"
 
           [question]="question()"
 

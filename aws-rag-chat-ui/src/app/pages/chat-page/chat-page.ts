@@ -537,10 +537,11 @@ implements AfterViewChecked, OnDestroy {
   selectDocumentFromChat(document: DocumentMetadata): void {
 
     this.uploadedDocumentId.set('');
+    this.useGlobalSearch.set(true);
     this.errorMessage.set('');
 
     this.addLocalAssistantMessage(
-      `Search will continue across all shared indexed documents, including **${document.fileName}**.`,
+      `Search will continue across all allowed indexed documents, including **${document.fileName}** if your role can access it.`,
       'text'
     );
   }
@@ -621,6 +622,13 @@ implements AfterViewChecked, OnDestroy {
     this.assistantTyping.set(true);
 
     this.pendingAskSessionId.set(sessionId);
+
+    console.info(
+      'Chat ask scope',
+      {
+        documentId: null,
+        searchAcrossAllDocuments: true
+      });
 
     this.api.askQuestion({
 

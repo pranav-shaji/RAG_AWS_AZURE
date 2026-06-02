@@ -13,7 +13,7 @@
     public sealed class ChatService
     {
         private const int HistoryWindowSize = 10;
-        private const string GroundedNoResultMessage = "I could not find that information in the available enterprise documents.";
+        private const string GroundedNoResultMessage = "I could not find this information in the uploaded documents.";
         private const string NoChartableDataMessage = "I found relevant document content, but it does not contain enough numeric/category data to render a chart.";
         private const string NoEnterpriseKnowledgeMessage = "No enterprise documents are available for your role yet.";
         private const string PendingApprovalMessage = "Your account is pending admin approval.";
@@ -76,18 +76,31 @@
         var hasExplicitDocumentScope =
             !string.IsNullOrWhiteSpace(request.DocumentId);
 
+        var shouldUseRetrieval =
+            intent is not QueryIntent.Greeting and
+                not QueryIntent.KnowledgeOverview and
+                not QueryIntent.Metadata;
+
         var searchSharedEnterpriseDocuments =
             request.SearchAcrossAllDocuments ||
             !hasExplicitDocumentScope;
 
         _logger.LogInformation(
-            "Chat request scope resolved. UserId={OwnerUserId}, SessionId={SessionId}, SearchAcrossAllDocuments={SearchAcrossAllDocuments}, DocumentId={DocumentId}, SearchSharedEnterpriseDocuments={SearchSharedEnterpriseDocuments}, Intent={Intent}",
+            "Incoming chat ask payload. UserId={OwnerUserId}, SessionId={SessionId}, DocumentId={DocumentId}, SearchAcrossAllDocuments={SearchAcrossAllDocuments}",
+            ownerUserId,
+            request.SessionId,
+            request.DocumentId ?? "(none)",
+            request.SearchAcrossAllDocuments);
+
+        _logger.LogInformation(
+            "Chat request scope resolved. UserId={OwnerUserId}, SessionId={SessionId}, SearchAcrossAllDocuments={SearchAcrossAllDocuments}, DocumentId={DocumentId}, SearchSharedEnterpriseDocuments={SearchSharedEnterpriseDocuments}, Intent={Intent}, ShouldUseRetrieval={ShouldUseRetrieval}",
             ownerUserId,
             request.SessionId,
             request.SearchAcrossAllDocuments,
             request.DocumentId ?? "(none)",
             searchSharedEnterpriseDocuments,
-            intent);
+            intent,
+            shouldUseRetrieval);
 
         string responseType = AiResponseType.Text;
 
@@ -222,7 +235,7 @@
             chartData = metadataResult.ChartData;
         }
 
-        else if (intent == QueryIntent.General)
+        else if (intent == QueryIntent.General && !shouldUseRetrieval)
         {
             var plan =
                 ResponsePlanner.Plan(
@@ -269,10 +282,12 @@
             responseType = plan.ResponseType;
 
             _logger.LogInformation(
-                "Chat ask received. UserId={OwnerUserId}, SessionId={SessionId}, DocumentId={DocumentId}, GlobalMode={GlobalMode}, Route={Route}, ResponseType={ResponseType}, QuestionLength={QuestionLength}",
+                "Chat retrieval path selected. UserId={OwnerUserId}, UserRole={UserRole}, SessionId={SessionId}, DocumentId={DocumentId}, SearchAcrossAllDocuments={SearchAcrossAllDocuments}, GlobalMode={GlobalMode}, Route={Route}, ResponseType={ResponseType}, QuestionLength={QuestionLength}",
                 ownerUserId,
+                access.ApprovedRole,
                 request.SessionId,
                 request.DocumentId ?? "(none)",
+                request.SearchAcrossAllDocuments,
                 searchSharedEnterpriseDocuments,
                 plan.Route,
                 plan.ResponseType,
@@ -329,6 +344,21 @@
                         finalAnswer = ragAnswer.Answer;
 
                         citations = ragAnswer.Citations;
+
+                        if (IsGroundedNoResult(finalAnswer))
+                        {
+                            finalAnswer = GroundedNoResultMessage;
+                            citations = [];
+                        }
+
+                        _logger.LogInformation(
+                            "Chat retrieval completed. UserId={OwnerUserId}, UserRole={UserRole}, SessionId={SessionId}, DocumentId={DocumentId}, SearchAcrossAllDocuments={SearchAcrossAllDocuments}, CitationCount={CitationCount}",
+                            ownerUserId,
+                            access.ApprovedRole,
+                            request.SessionId,
+                            request.DocumentId ?? "(none)",
+                            request.SearchAcrossAllDocuments,
+                            citations.Count);
 
                         if (responseType is
                             AiResponseType.PieChart or
@@ -1132,6 +1162,18 @@
         {
             return answer.Contains(
                 GroundedNoResultMessage,
+                StringComparison.OrdinalIgnoreCase) ||
+            answer.Contains(
+                "I could not find that information in the available enterprise documents.",
+                StringComparison.OrdinalIgnoreCase) ||
+            answer.Contains(
+                "could not find relevant information",
+                StringComparison.OrdinalIgnoreCase) ||
+            answer.Contains(
+                "not found in the uploaded document",
+                StringComparison.OrdinalIgnoreCase) ||
+            answer.Contains(
+                "not found in the retrieved context",
                 StringComparison.OrdinalIgnoreCase);
         }
 

@@ -3,7 +3,7 @@ using Amazon.DynamoDBv2;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
 using Amazon.Textract;
-using AwsRagChat.Domain.Entities;
+using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Ingestion.Options;
 using AwsRagChat.Ingestion.Services;
 using AwsRagChat.Infrastructure.Services;
@@ -15,10 +15,7 @@ namespace AwsRagChat.Ingestion.Handlers;
 public sealed class TextractCompletionFunction
 {
     private readonly TextractAsyncExtractionService _textractAsyncExtractionService;
-    private readonly ChunkingService _chunkingService;
-    private readonly EmbeddingBatchService _embeddingBatchService;
-    private readonly ChunkPersistenceService _chunkPersistenceService;
-    private readonly OpenSearchService _openSearchService;
+    private readonly DocumentIngestionPipeline _documentIngestionPipeline;
     private readonly DocumentStatusService _documentStatusService;
 
     private readonly IConfiguration _configuration;
@@ -44,51 +41,71 @@ public sealed class TextractCompletionFunction
         var textract = new AmazonTextractClient();
 
         _textractAsyncExtractionService = new TextractAsyncExtractionService(textract, textractAsyncOptions);
-        _chunkingService = new ChunkingService();
-        _embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions);
-        _chunkPersistenceService = new ChunkPersistenceService(dynamoDb, dynamoDbOptions);
+
+        var chunkingService = new ChunkingService();
+        var embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions);
+        var chunkPersistenceService = new ChunkPersistenceService(dynamoDb, dynamoDbOptions);
+
         _documentStatusService = new DocumentStatusService(
             dynamoDb,
             _configuration["DynamoDb:DocumentsTableName"] ?? "rag-documents");
 
-        _openSearchService = new OpenSearchService(_configuration);
+        var openSearchService = new OpenSearchService(_configuration);
+
+        _documentIngestionPipeline = new DocumentIngestionPipeline(
+            chunkingService,
+            embeddingBatchService,
+            chunkPersistenceService,
+            _documentStatusService,
+            openSearchService);
     }
 
     public async Task FunctionHandler(SQSEvent sqsEvent, ILambdaContext context)
     {
-        foreach (var record in sqsEvent.Records)
+        var records = sqsEvent?.Records ?? [];
+        var recordCount = records.Count;
+        context.Logger.LogLine($"Textract completion SQS record count: {recordCount}");
+
+        if (recordCount == 0)
+            return;
+
+        foreach (var record in records)
         {
+            string jobId = string.Empty;
+            string status = string.Empty;
+            string bucket = string.Empty;
+            string key = string.Empty;
+            string fileName = string.Empty;
+            string ownerUserId = string.Empty;
+            string documentId = string.Empty;
+
             try
             {
-                context.Logger.LogLine($"RAW SQS BODY: {record.Body}");
-
-                using var outerDoc = JsonDocument.Parse(record.Body);
-
-                if (!outerDoc.RootElement.TryGetProperty("Message", out var messageElement))
+                if (!TryGetTextractMessageJson(
+                        record.Body,
+                        out var messageJson,
+                        out var messageShape,
+                        out var parseError))
                 {
-                    context.Logger.LogLine("SNS Message field not found.");
+                    context.Logger.LogLine(
+                        $"Unable to parse Textract completion message. Error: {parseError}. RawBody: {TrimForLog(record.Body, 2000)}");
                     continue;
                 }
 
-                var messageJson = messageElement.GetString();
-
-                if (string.IsNullOrWhiteSpace(messageJson))
-                {
-                    context.Logger.LogLine("SNS Message is empty.");
-                    continue;
-                }
-
-                context.Logger.LogLine($"INNER MESSAGE: {messageJson}");
+                context.Logger.LogLine($"Detected Textract completion message shape: {messageShape}");
 
                 using var innerDoc = JsonDocument.Parse(messageJson);
 
-                var jobId = innerDoc.RootElement.TryGetProperty("JobId", out var jobIdElement)
-                    ? jobIdElement.GetString()
-                    : null;
+                jobId = innerDoc.RootElement.TryGetProperty("JobId", out var jobIdElement)
+                    ? jobIdElement.GetString() ?? string.Empty
+                    : string.Empty;
 
-                var status = innerDoc.RootElement.TryGetProperty("Status", out var statusElement)
-                    ? statusElement.GetString()
-                    : null;
+                status = innerDoc.RootElement.TryGetProperty("Status", out var statusElement)
+                    ? statusElement.GetString() ?? string.Empty
+                    : string.Empty;
+
+                context.Logger.LogLine(
+                    $"Textract completion notification. JobId: {jobId}, Status: {status}");
 
                 if (string.IsNullOrWhiteSpace(jobId))
                 {
@@ -96,15 +113,23 @@ public sealed class TextractCompletionFunction
                     continue;
                 }
 
-                if (!TryReadDocumentLocation(innerDoc.RootElement, out var bucket, out var key))
+                if (!TryReadDocumentLocation(innerDoc.RootElement, out bucket, out key))
                 {
-                    context.Logger.LogLine($"Textract notification for job {jobId} did not include a valid S3 location.");
+                    context.Logger.LogLine(
+                        $"Textract notification for job {jobId} did not include a valid S3 location. " +
+                        "No existing repository lookup by TextractJobId was found, so the document cannot be resolved from this message.");
                     continue;
                 }
 
-                var fileName = Path.GetFileName(key);
-                var ownerUserId = TryExtractOwnerUserId(key);
-                var documentId = TryExtractDocumentId(key);
+                context.Logger.LogLine(
+                    $"Textract document location resolved. JobId: {jobId}, Bucket: {bucket}, Key: {key}");
+
+                fileName = Path.GetFileName(key);
+                ownerUserId = TryExtractOwnerUserId(key);
+                documentId = TryExtractDocumentId(key);
+
+                context.Logger.LogLine(
+                    $"Textract document metadata resolved. JobId: {jobId}, DocumentId: {documentId}, OwnerUserId: {ownerUserId}, FileName: {fileName}");
 
                 if (string.IsNullOrWhiteSpace(ownerUserId) ||
                     string.IsNullOrWhiteSpace(documentId) ||
@@ -114,9 +139,9 @@ public sealed class TextractCompletionFunction
                     continue;
                 }
 
-                if (!string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase))
+                if (IsFailedTextractStatus(status))
                 {
-                    context.Logger.LogLine($"Skipping job {jobId} with status {status}");
+                    context.Logger.LogLine($"Textract job {jobId} ended with failure status {status}.");
 
                     await _documentStatusService.MarkFailedAsync(
                         documentId,
@@ -129,94 +154,57 @@ public sealed class TextractCompletionFunction
                     continue;
                 }
 
+                if (!string.Equals(status, "SUCCEEDED", StringComparison.OrdinalIgnoreCase))
+                {
+                    context.Logger.LogLine($"Skipping Textract job {jobId} with non-terminal/non-success status {status}.");
+                    continue;
+                }
+
                 context.Logger.LogLine($"Processing Textract result for {key}");
 
                 var extractedDocument = await _textractAsyncExtractionService
                     .GetCompletedDocumentAsync(jobId, CancellationToken.None);
 
-                if (string.IsNullOrWhiteSpace(extractedDocument.FullText))
-                {
-                    context.Logger.LogLine("No text extracted.");
+                context.Logger.LogLine(
+                    $"Textract extracted document. JobId: {jobId}, TextLength: {extractedDocument.FullText?.Length ?? 0}, PageCount: {extractedDocument.PageCount}");
 
+                context.Logger.LogLine(
+                    $"Calling DocumentIngestionPipeline. JobId: {jobId}, DocumentId: {documentId}, Key: {key}");
+
+                var pipelineResult = await _documentIngestionPipeline.ProcessExtractedDocumentAsync(
+                    new IngestionDocumentRequest
+                    {
+                        DocumentId = documentId,
+                        OwnerUserId = ownerUserId,
+                        FileName = fileName,
+                        ObjectKey = key,
+                        OcrJobId = jobId,
+                        EmptyTextErrorMessage = "No extractable text found after Textract OCR."
+                    },
+                    extractedDocument,
+                    context.Logger.LogLine,
+                    CancellationToken.None);
+
+                context.Logger.LogLine(
+                    $"DocumentIngestionPipeline result. JobId: {jobId}, DocumentId: {documentId}, Succeeded: {pipelineResult.Succeeded}, ChunkCount: {pipelineResult.ChunkCount}, PageCount: {pipelineResult.PageCount}, Error: {pipelineResult.ErrorMessage ?? string.Empty}");
+            }
+            catch (Exception ex)
+            {
+                context.Logger.LogLine($"ERROR: {ex}");
+
+                if (!string.IsNullOrWhiteSpace(documentId) &&
+                    !string.IsNullOrWhiteSpace(ownerUserId) &&
+                    !string.IsNullOrWhiteSpace(fileName) &&
+                    !string.IsNullOrWhiteSpace(key))
+                {
                     await _documentStatusService.MarkFailedAsync(
                         documentId,
                         ownerUserId,
                         fileName,
                         key,
-                        "No extractable text found after Textract OCR.",
+                        ex.Message,
                         CancellationToken.None);
-
-                    continue;
                 }
-
-                var chunks = _chunkingService.CreateChunks(
-                    documentId,
-                    fileName,
-                    key,
-                    extractedDocument);
-
-                var isAdminDocument = await _documentStatusService.GetIsAdminDocumentAsync(
-                    documentId,
-                    CancellationToken.None);
-
-                var allowedRoles = await _documentStatusService.GetAllowedRolesAsync(
-                    documentId,
-                    CancellationToken.None);
-
-                foreach (var chunk in chunks)
-                {
-                    chunk.OwnerUserId = ownerUserId;
-                    chunk.IsAdminDocument = isAdminDocument;
-                    chunk.AllowedRoles = allowedRoles;
-                }
-
-                await _documentStatusService.MarkOcrCompletedAsync(
-                    documentId,
-                    ownerUserId,
-                    fileName,
-                    key,
-                    jobId,
-                    chunks.Count,
-                    extractedDocument.PageCount,
-                    CancellationToken.None);
-
-                await _documentStatusService.MarkEmbeddingStartedAsync(
-                    documentId,
-                    ownerUserId,
-                    fileName,
-                    key,
-                    CancellationToken.None);
-
-                await _embeddingBatchService.AddEmbeddingsAsync(chunks);
-
-                await _chunkPersistenceService.SaveChunksAsync(chunks);
-
-                await _documentStatusService.MarkIndexingStartedAsync(
-                    documentId,
-                    ownerUserId,
-                    fileName,
-                    key,
-                    CancellationToken.None);
-
-                foreach (var chunk in chunks)
-                {
-                    await _openSearchService.IndexDocumentAsync(chunk);
-                }
-
-                await _documentStatusService.MarkIndexedAsync(
-                    documentId,
-                    ownerUserId,
-                    fileName,
-                    key,
-                    chunks.Count,
-                    extractedDocument.PageCount,
-                    CancellationToken.None);
-
-                context.Logger.LogLine($"SUCCESS: Processed {chunks.Count} chunks across {extractedDocument.PageCount} pages");
-            }
-            catch (Exception ex)
-            {
-                context.Logger.LogLine($"ERROR: {ex}");
             }
         }
     }
@@ -262,5 +250,80 @@ public sealed class TextractCompletionFunction
 
         return !string.IsNullOrWhiteSpace(bucket) &&
                !string.IsNullOrWhiteSpace(key);
+    }
+
+    private static bool TryGetTextractMessageJson(
+        string? recordBody,
+        out string messageJson,
+        out string messageShape,
+        out string error)
+    {
+        messageJson = string.Empty;
+        messageShape = string.Empty;
+        error = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(recordBody))
+        {
+            error = "SQS record body is empty.";
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(recordBody);
+            var root = document.RootElement;
+
+            if (root.TryGetProperty("Message", out var messageElement))
+            {
+                messageJson = messageElement.ValueKind == JsonValueKind.String
+                    ? messageElement.GetString() ?? string.Empty
+                    : messageElement.GetRawText();
+
+                messageShape = "SNS envelope";
+
+                if (string.IsNullOrWhiteSpace(messageJson))
+                {
+                    error = "SNS Message is empty.";
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (root.TryGetProperty("JobId", out _) ||
+                root.TryGetProperty("Status", out _) ||
+                root.TryGetProperty("DocumentLocation", out _))
+            {
+                messageJson = root.GetRawText();
+                messageShape = "Raw Textract message";
+                return true;
+            }
+
+            error = "Message is neither an SNS envelope nor a raw Textract completion message.";
+            return false;
+        }
+        catch (JsonException ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private static bool IsFailedTextractStatus(string? status)
+    {
+        return string.Equals(status, "FAILED", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(status, "PARTIAL_SUCCESS", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string TrimForLog(string? text, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var normalized = string.Join(" ", text.Split(['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+        return normalized.Length <= maxLength
+            ? normalized
+            : normalized[..maxLength] + "...";
     }
 }

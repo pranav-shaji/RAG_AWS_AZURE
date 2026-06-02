@@ -1,0 +1,45 @@
+@if (auth.isAuthenticated()) {
+  <router-outlet />
+} @else {
+  <main class="login-page">
+    <header class="login-header" aria-label="Product">
+      <span class="header-brand">
+        <span class="header-mark" aria-hidden="true"></span>
+        RAG Intellect AI
+      </span>
+      <span>Enterprise Knowledge Assistant</span>
+    </header>
+
+    <section class="login-card" aria-labelledby="login-title">
+      <div class="login-panel">
+        <div class="login-logo" aria-hidden="true">
+          <span></span>
+        </div>
+
+        <h1 id="login-title">RAG Intellect AI</h1>
+
+        <p class="login-subtitle">
+          Ask about your enterprise knowledge base,<br />
+          documents, and cited answers.
+        </p>
+
+        <button
+          class="login-button"
+          type="button"
+          (click)="login()">
+          Login with Cognito
+        </button>
+
+        <div class="login-badges" aria-label="Platform assurances">
+          <span>Secure</span>
+          <span>Role-Based Access</span>
+          <span>Document-Grounded AI</span>
+        </div>
+
+        <p class="login-caption">
+          Powered by Amazon Bedrock, OpenSearch, Cognito, and Titan Embeddings
+        </p>
+      </div>
+    </section>
+  </main>
+}

@@ -1,37 +1,15 @@
-using Amazon;
-using Amazon.BedrockRuntime;
-using Amazon.CognitoIdentityProvider;
-using Amazon.DynamoDBv2;
-using Amazon.Extensions.NETCore.Setup;
-using Amazon.S3;
-using AwsRagChat.Infrastructure;
-using AwsRagChat.Infrastructure.Services;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using StackExchange.Redis;
 using AwsRagChat.Infrastructure.Cache;
 using AwsRagChat.Application.Interfaces;
+using AwsRagChat.Infrastructure.CloudProviders;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 builder.Logging.AddDebug();
-
-var region = builder.Configuration["AWS:Region"];
-var cognitoAuthority = builder.Configuration["Cognito:Authority"];
-var cognitoAppClientId = builder.Configuration["Cognito:AppClientId"];
-
-if (string.IsNullOrWhiteSpace(region))
-    throw new InvalidOperationException("AWS:Region is required.");
-
-if (string.IsNullOrWhiteSpace(cognitoAuthority))
-    throw new InvalidOperationException("Cognito:Authority is required.");
-
-if (string.IsNullOrWhiteSpace(cognitoAppClientId))
-    throw new InvalidOperationException("Cognito:AppClientId is required.");
 
 var allowedOrigins = builder.Configuration
     .GetSection("Cors:AllowedOrigins")
@@ -60,106 +38,7 @@ builder.Services.AddCors(options =>
     });
 });
 
-builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(options =>
-    {
-        options.Authority = cognitoAuthority;
-
-        options.TokenValidationParameters =
-            new TokenValidationParameters
-            {
-                ValidateIssuer = true,
-
-                ValidateAudience = false,
-
-                ValidateLifetime = true,
-
-                ValidateIssuerSigningKey = true,
-
-                // User identity
-                NameClaimType = "sub",
-
-                // IMPORTANT:
-                // Maps Cognito groups to ASP.NET roles
-                // Enables:
-                // [Authorize(Roles = "Admin")]
-                RoleClaimType = "cognito:groups"
-            };
-
-        options.Events = new JwtBearerEvents
-        {
-            OnTokenValidated = context =>
-            {
-                var principal = context.Principal;
-
-                if (principal is null)
-                {
-                    context.Fail("No principal found.");
-                    return Task.CompletedTask;
-                }
-
-                // Only allow Cognito ACCESS tokens
-                var tokenUse =
-                    principal.FindFirst("token_use")?.Value;
-
-                if (!string.Equals(
-                        tokenUse,
-                        "access",
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    context.Fail(
-                        "Only Cognito access tokens are accepted.");
-
-                    return Task.CompletedTask;
-                }
-
-                // Ensure token belongs to configured app client
-                var clientId =
-                    principal.FindFirst("client_id")?.Value;
-
-                if (!string.Equals(
-                        clientId,
-                        cognitoAppClientId,
-                        StringComparison.Ordinal))
-                {
-                    context.Fail(
-                        "Token client_id does not match the configured app client.");
-
-                    return Task.CompletedTask;
-                }
-
-                return Task.CompletedTask;
-            },
-
-            OnAuthenticationFailed = context =>
-            {
-                var logger = context.HttpContext.RequestServices
-                    .GetRequiredService<ILoggerFactory>()
-                    .CreateLogger("JwtBearer");
-
-                logger.LogWarning(
-                    context.Exception,
-                    "Authentication failed.");
-
-                return Task.CompletedTask;
-            },
-
-            OnChallenge = context =>
-            {
-                var logger = context.HttpContext.RequestServices
-                    .GetRequiredService<ILoggerFactory>()
-                    .CreateLogger("JwtBearer");
-
-                logger.LogWarning(
-                    "JWT challenge triggered. Error: {Error}, Description: {Description}",
-                    context.Error,
-                    context.ErrorDescription);
-
-                return Task.CompletedTask;
-            }
-        };
-    });
+builder.Services.AddCloudProviderAuthentication(builder.Configuration);
 
 builder.Services.AddStackExchangeRedisCache(options =>
 {
@@ -181,8 +60,6 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
 });
 
 builder.Services.AddSingleton<IRedisCacheService, RedisCacheService>();
-
-builder.Services.AddAuthorization();
 
 builder.Services.AddControllers();
 
@@ -232,22 +109,7 @@ builder.Services.AddSwaggerGen(options =>
         });
 });
 
-builder.Services.AddDefaultAWSOptions(new AWSOptions
-{
-    Region = RegionEndpoint.GetBySystemName(region)
-});
-
-builder.Services.AddAWSService<IAmazonS3>();
-
-builder.Services.AddAWSService<IAmazonDynamoDB>();
-
-builder.Services.AddAWSService<IAmazonBedrockRuntime>();
-
-builder.Services.AddAWSService<IAmazonCognitoIdentityProvider>();
-
-builder.Services.AddSingleton<OpenSearchService>();
-
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddCloudProviderInfrastructure(builder.Configuration);
 
 var app = builder.Build();
 
