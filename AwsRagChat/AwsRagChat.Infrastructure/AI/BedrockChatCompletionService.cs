@@ -12,7 +12,7 @@ using Microsoft.Extensions.Options;
 
 namespace AwsRagChat.Infrastructure.AI;
 
-public sealed class BedrockChatCompletionService : IChatCompletionService
+public sealed class BedrockChatCompletionService : IChatProvider
 {
     private readonly IAmazonBedrockRuntime _bedrockRuntime;
     private readonly BedrockOptions _bedrockOptions;

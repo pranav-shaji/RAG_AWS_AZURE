@@ -32,7 +32,13 @@ public static class DependencyInjection
         services.Configure<CognitoOptions>(
             configuration.GetSection(CognitoOptions.SectionName));
 
-        services.AddScoped<IStorageService, S3StorageService>();
+        services.AddScoped<S3StorageService>();
+
+        services.AddScoped<IStorageProvider>(provider =>
+            provider.GetRequiredService<S3StorageService>());
+
+        services.AddScoped<IStorageService>(provider =>
+            provider.GetRequiredService<S3StorageService>());
 
         services.AddAWSService<IAmazonCognitoIdentityProvider>();
 
@@ -44,11 +50,29 @@ public static class DependencyInjection
 
         services.AddScoped<IUserRepository, DynamoDbUserRepository>();
 
-        services.AddScoped<IEmbeddingService, BedrockEmbeddingService>();
+        services.AddScoped<BedrockEmbeddingService>();
 
-        services.AddScoped<IChatCompletionService, BedrockChatCompletionService>();
+        services.AddScoped<IEmbeddingProvider>(provider =>
+            provider.GetRequiredService<BedrockEmbeddingService>());
 
-        services.AddScoped<IVectorSearchService, OpenSearchService>();
+        services.AddScoped<IEmbeddingService>(provider =>
+            provider.GetRequiredService<BedrockEmbeddingService>());
+
+        services.AddScoped<BedrockChatCompletionService>();
+
+        services.AddScoped<IChatProvider>(provider =>
+            provider.GetRequiredService<BedrockChatCompletionService>());
+
+        services.AddScoped<IChatCompletionService>(provider =>
+            provider.GetRequiredService<BedrockChatCompletionService>());
+
+        services.AddScoped<OpenSearchService>();
+
+        services.AddScoped<IVectorStore>(provider =>
+            provider.GetRequiredService<OpenSearchService>());
+
+        services.AddScoped<IVectorSearchService>(provider =>
+            provider.GetRequiredService<OpenSearchService>());
 
         services.AddScoped<RetrievalService>();
 

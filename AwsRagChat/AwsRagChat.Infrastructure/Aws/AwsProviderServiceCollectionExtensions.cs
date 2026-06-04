@@ -4,7 +4,6 @@ using Amazon.CognitoIdentityProvider;
 using Amazon.DynamoDBv2;
 using Amazon.Extensions.NETCore.Setup;
 using Amazon.S3;
-using AwsRagChat.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -31,7 +30,6 @@ public static class AwsProviderServiceCollectionExtensions
         services.AddAWSService<IAmazonDynamoDB>();
         services.AddAWSService<IAmazonBedrockRuntime>();
         services.AddAWSService<IAmazonCognitoIdentityProvider>();
-        services.AddSingleton<OpenSearchService>();
 
         services.AddInfrastructure(configuration);
 

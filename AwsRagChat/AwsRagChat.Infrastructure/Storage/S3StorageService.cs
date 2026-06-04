@@ -6,7 +6,7 @@ using Microsoft.Extensions.Options;
 
 namespace AwsRagChat.Infrastructure.Storage;
 
-public sealed class S3StorageService : IStorageService
+public sealed class S3StorageService : IStorageProvider
 {
     private readonly IAmazonS3 _amazonS3;
     private readonly S3Options _s3Options;

@@ -10,7 +10,7 @@ using System.Diagnostics;
 
 namespace AwsRagChat.Infrastructure.AI;
 
-public sealed class BedrockEmbeddingService : IEmbeddingService
+public sealed class BedrockEmbeddingService : IEmbeddingProvider
 {
     private readonly IAmazonBedrockRuntime _bedrockRuntime;
     private readonly BedrockOptions _bedrockOptions;
