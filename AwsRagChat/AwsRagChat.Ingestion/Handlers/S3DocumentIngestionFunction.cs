@@ -1,16 +1,11 @@
-﻿using Amazon.BedrockRuntime;
-using Amazon.DynamoDBv2;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.S3Events;
 using Amazon.S3;
-using Amazon.Textract;
+using AwsRagChat.Application.Interfaces;
+using AwsRagChat.Ingestion.Aws;
 using AwsRagChat.Ingestion.Models;
-using AwsRagChat.Ingestion.Options;
 using AwsRagChat.Ingestion.Services;
-using AwsRagChat.Infrastructure.Persistence;
-using AwsRagChat.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
-using InfrastructureDynamoDbOptions = AwsRagChat.Infrastructure.Options.DynamoDbOptions;
 
 namespace AwsRagChat.Ingestion.Handlers;
 
@@ -20,8 +15,8 @@ public sealed class S3DocumentIngestionFunction
     private readonly TextExtractionService _textExtractionService;
     private readonly TextractTextExtractionService _textractTextExtractionService;
     private readonly TextractAsyncExtractionService _textractAsyncExtractionService;
-    private readonly DocumentStatusService _documentStatusService;
-    private readonly DocumentIngestionPipeline _documentIngestionPipeline;
+    private readonly IDocumentStatusService _documentStatusService;
+    private readonly IIngestionPipeline<IngestionDocumentRequest, ExtractedDocument, IngestionPipelineResult> _documentIngestionPipeline;
 
     public S3DocumentIngestionFunction()
     {
@@ -30,44 +25,14 @@ public sealed class S3DocumentIngestionFunction
             .AddJsonFile("appsettings.json", optional: false)
             .Build();
 
-        var dynamoDbOptions = Microsoft.Extensions.Options.Options.Create(
-            configuration.GetSection(DynamoDbOptions.SectionName).Get<DynamoDbOptions>() ?? new DynamoDbOptions());
+        var services = AwsIngestionComposition.Create(configuration);
 
-        var infrastructureDynamoDbOptions = Microsoft.Extensions.Options.Options.Create(
-            configuration.GetSection(InfrastructureDynamoDbOptions.SectionName).Get<InfrastructureDynamoDbOptions>() ?? new InfrastructureDynamoDbOptions());
-
-        var bedrockOptions = Microsoft.Extensions.Options.Options.Create(
-            configuration.GetSection(BedrockOptions.SectionName).Get<BedrockOptions>() ?? new BedrockOptions());
-
-        var textractAsyncOptions = Microsoft.Extensions.Options.Options.Create(
-            configuration.GetSection(TextractAsyncOptions.SectionName).Get<TextractAsyncOptions>() ?? new TextractAsyncOptions());
-
-        _amazonS3 = new AmazonS3Client();
-
-        var dynamoDb = new AmazonDynamoDBClient();
-        var bedrock = new AmazonBedrockRuntimeClient();
-        var textract = new AmazonTextractClient();
-
-        _textExtractionService = new TextExtractionService();
-        _textractTextExtractionService = new TextractTextExtractionService(textract);
-        _textractAsyncExtractionService = new TextractAsyncExtractionService(textract, textractAsyncOptions);
-
-        var chunkingService = new ChunkingService();
-        var embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions);
-        var chunkRepository = new DynamoDbChunkRepository(dynamoDb, infrastructureDynamoDbOptions);
-
-        _documentStatusService = new DocumentStatusService(
-            dynamoDb,
-            configuration["DynamoDb:DocumentsTableName"] ?? "rag-documents");
-
-        var openSearchService = new OpenSearchService(configuration);
-
-        _documentIngestionPipeline = new DocumentIngestionPipeline(
-            chunkingService,
-            embeddingBatchService,
-            chunkRepository,
-            _documentStatusService,
-            openSearchService);
+        _amazonS3 = services.AmazonS3;
+        _textExtractionService = services.TextExtractionService;
+        _textractTextExtractionService = services.TextractTextExtractionService;
+        _textractAsyncExtractionService = services.TextractAsyncExtractionService;
+        _documentStatusService = services.DocumentStatusService;
+        _documentIngestionPipeline = services.DocumentIngestionPipeline;
     }
 
     public async Task FunctionHandler(S3Event s3Event, ILambdaContext context)

@@ -1,24 +1,19 @@
-﻿using Amazon.BedrockRuntime;
-using Amazon.DynamoDBv2;
 using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
-using Amazon.Textract;
+using AwsRagChat.Application.Interfaces;
+using AwsRagChat.Ingestion.Aws;
 using AwsRagChat.Ingestion.Models;
-using AwsRagChat.Ingestion.Options;
 using AwsRagChat.Ingestion.Services;
-using AwsRagChat.Infrastructure.Persistence;
-using AwsRagChat.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using System.Text.Json;
-using InfrastructureDynamoDbOptions = AwsRagChat.Infrastructure.Options.DynamoDbOptions;
 
 namespace AwsRagChat.Ingestion.Handlers;
 
 public sealed class TextractCompletionFunction
 {
     private readonly TextractAsyncExtractionService _textractAsyncExtractionService;
-    private readonly DocumentIngestionPipeline _documentIngestionPipeline;
-    private readonly DocumentStatusService _documentStatusService;
+    private readonly IIngestionPipeline<IngestionDocumentRequest, ExtractedDocument, IngestionPipelineResult> _documentIngestionPipeline;
+    private readonly IDocumentStatusService _documentStatusService;
 
     private readonly IConfiguration _configuration;
 
@@ -29,40 +24,11 @@ public sealed class TextractCompletionFunction
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
             .Build();
 
-        var dynamoDbOptions = Microsoft.Extensions.Options.Options.Create(
-            _configuration.GetSection(DynamoDbOptions.SectionName).Get<DynamoDbOptions>() ?? new DynamoDbOptions());
+        var services = AwsIngestionComposition.Create(_configuration);
 
-        var infrastructureDynamoDbOptions = Microsoft.Extensions.Options.Options.Create(
-            _configuration.GetSection(InfrastructureDynamoDbOptions.SectionName).Get<InfrastructureDynamoDbOptions>() ?? new InfrastructureDynamoDbOptions());
-
-        var bedrockOptions = Microsoft.Extensions.Options.Options.Create(
-            _configuration.GetSection(BedrockOptions.SectionName).Get<BedrockOptions>() ?? new BedrockOptions());
-
-        var textractAsyncOptions = Microsoft.Extensions.Options.Options.Create(
-            _configuration.GetSection(TextractAsyncOptions.SectionName).Get<TextractAsyncOptions>() ?? new TextractAsyncOptions());
-
-        var dynamoDb = new AmazonDynamoDBClient();
-        var bedrock = new AmazonBedrockRuntimeClient();
-        var textract = new AmazonTextractClient();
-
-        _textractAsyncExtractionService = new TextractAsyncExtractionService(textract, textractAsyncOptions);
-
-        var chunkingService = new ChunkingService();
-        var embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions);
-        var chunkRepository = new DynamoDbChunkRepository(dynamoDb, infrastructureDynamoDbOptions);
-
-        _documentStatusService = new DocumentStatusService(
-            dynamoDb,
-            _configuration["DynamoDb:DocumentsTableName"] ?? "rag-documents");
-
-        var openSearchService = new OpenSearchService(_configuration);
-
-        _documentIngestionPipeline = new DocumentIngestionPipeline(
-            chunkingService,
-            embeddingBatchService,
-            chunkRepository,
-            _documentStatusService,
-            openSearchService);
+        _textractAsyncExtractionService = services.TextractAsyncExtractionService;
+        _documentStatusService = services.DocumentStatusService;
+        _documentIngestionPipeline = services.DocumentIngestionPipeline;
     }
 
     public async Task FunctionHandler(SQSEvent sqsEvent, ILambdaContext context)
