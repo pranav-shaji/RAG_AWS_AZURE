@@ -2,13 +2,14 @@
 using System.Text.Json;
 using Amazon.BedrockRuntime;
 using Amazon.BedrockRuntime.Model;
+using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Domain.Entities;
 using AwsRagChat.Ingestion.Options;
 using Microsoft.Extensions.Options;
 
 namespace AwsRagChat.Ingestion.Services;
 
-public sealed class EmbeddingBatchService
+public sealed class EmbeddingBatchService : IEmbeddingProvider
 {
     private readonly IAmazonBedrockRuntime _bedrockRuntime;
     private readonly BedrockOptions _bedrockOptions;
@@ -34,7 +35,7 @@ public sealed class EmbeddingBatchService
         }
     }
 
-    private async Task<List<float>> GenerateEmbeddingAsync(
+    public async Task<List<float>> GenerateEmbeddingAsync(
         string text,
         CancellationToken cancellationToken = default)
     {

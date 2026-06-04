@@ -1,30 +1,28 @@
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Ingestion.Models;
-using AwsRagChat.Infrastructure.Services;
-
 namespace AwsRagChat.Ingestion.Services;
 
 public sealed class DocumentIngestionPipeline :
     IIngestionPipeline<IngestionDocumentRequest, ExtractedDocument, IngestionPipelineResult>
 {
     private readonly ChunkingService _chunkingService;
-    private readonly EmbeddingBatchService _embeddingBatchService;
+    private readonly IEmbeddingProvider _embeddingProvider;
     private readonly ChunkPersistenceService _chunkPersistenceService;
-    private readonly DocumentStatusService _documentStatusService;
-    private readonly OpenSearchService _openSearchService;
+    private readonly IDocumentStatusService _documentStatusService;
+    private readonly IVectorStore _vectorStore;
 
     public DocumentIngestionPipeline(
         ChunkingService chunkingService,
-        EmbeddingBatchService embeddingBatchService,
+        IEmbeddingProvider embeddingProvider,
         ChunkPersistenceService chunkPersistenceService,
-        DocumentStatusService documentStatusService,
-        OpenSearchService openSearchService)
+        IDocumentStatusService documentStatusService,
+        IVectorStore vectorStore)
     {
         _chunkingService = chunkingService;
-        _embeddingBatchService = embeddingBatchService;
+        _embeddingProvider = embeddingProvider;
         _chunkPersistenceService = chunkPersistenceService;
         _documentStatusService = documentStatusService;
-        _openSearchService = openSearchService;
+        _vectorStore = vectorStore;
     }
 
     public async Task<IngestionPipelineResult> ProcessExtractedDocumentAsync(
@@ -104,9 +102,15 @@ public sealed class DocumentIngestionPipeline :
 
         log?.Invoke("Generating embeddings.");
 
-        await _embeddingBatchService.AddEmbeddingsAsync(
-            chunks,
-            cancellationToken);
+        foreach (var chunk in chunks)
+        {
+            chunk.Embedding = await _embeddingProvider.GenerateEmbeddingAsync(
+                chunk.Text,
+                cancellationToken);
+
+            if (chunk.Embedding.Count == 0)
+                throw new InvalidOperationException($"Empty embedding generated for chunk {chunk.ChunkId}.");
+        }
 
         log?.Invoke(
             $"Generated embeddings. ChunkCount: {chunks.Count}, Dimensions: {(chunks.Count > 0 ? chunks[0].Embedding.Count : 0)}");
@@ -131,7 +135,7 @@ public sealed class DocumentIngestionPipeline :
             log?.Invoke(
                 $"Indexing chunk. DocumentId: {chunk.DocumentId}, ChunkId: {chunk.ChunkId}, OwnerUserId: {chunk.OwnerUserId}, TextLength: {chunk.Text?.Length ?? 0}");
 
-            await _openSearchService.IndexDocumentAsync(chunk);
+            await _vectorStore.IndexDocumentAsync(chunk);
         }
 
         await _documentStatusService.MarkIndexedAsync(
