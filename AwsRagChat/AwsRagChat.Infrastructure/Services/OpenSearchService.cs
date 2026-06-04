@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 
 namespace AwsRagChat.Infrastructure.Services;
 
-public sealed class OpenSearchService : IVectorSearchService
+public sealed class OpenSearchService : IVectorStore
 {
     private readonly IOpenSearchClient _client;
     private readonly string _indexName;

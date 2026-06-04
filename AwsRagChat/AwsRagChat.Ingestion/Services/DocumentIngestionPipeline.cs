@@ -1,9 +1,11 @@
+using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Infrastructure.Services;
 
 namespace AwsRagChat.Ingestion.Services;
 
-public sealed class DocumentIngestionPipeline
+public sealed class DocumentIngestionPipeline :
+    IIngestionPipeline<IngestionDocumentRequest, ExtractedDocument, IngestionPipelineResult>
 {
     private readonly ChunkingService _chunkingService;
     private readonly EmbeddingBatchService _embeddingBatchService;

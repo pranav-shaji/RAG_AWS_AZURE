@@ -1,10 +1,11 @@
 ﻿using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
+using AwsRagChat.Application.Interfaces;
 using System.Globalization;
 
 namespace AwsRagChat.Ingestion.Services;
 
-public sealed class DocumentStatusService
+public sealed class DocumentStatusService : IDocumentStatusService
 {
     private readonly IAmazonDynamoDB _dynamoDb;
     private readonly string _tableName;
