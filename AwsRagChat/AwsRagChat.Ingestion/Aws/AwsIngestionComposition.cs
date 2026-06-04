@@ -5,10 +5,12 @@ using Amazon.Textract;
 using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Ingestion.Options;
 using AwsRagChat.Ingestion.Services;
+using AwsRagChat.Infrastructure.Storage;
 using AwsRagChat.Infrastructure.Persistence;
 using AwsRagChat.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using InfrastructureDynamoDbOptions = AwsRagChat.Infrastructure.Options.DynamoDbOptions;
+using InfrastructureS3Options = AwsRagChat.Infrastructure.Options.S3Options;
 
 namespace AwsRagChat.Ingestion.Aws;
 
@@ -28,6 +30,9 @@ public static class AwsIngestionComposition
         var textractAsyncOptions = Microsoft.Extensions.Options.Options.Create(
             configuration.GetSection(TextractAsyncOptions.SectionName).Get<TextractAsyncOptions>() ?? new TextractAsyncOptions());
 
+        var s3Options = Microsoft.Extensions.Options.Options.Create(
+            configuration.GetSection(InfrastructureS3Options.SectionName).Get<InfrastructureS3Options>() ?? new InfrastructureS3Options());
+
         var amazonS3 = new AmazonS3Client();
         var dynamoDb = new AmazonDynamoDBClient();
         var bedrock = new AmazonBedrockRuntimeClient();
@@ -36,6 +41,12 @@ public static class AwsIngestionComposition
         var textExtractionService = new TextExtractionService();
         var textractTextExtractionService = new TextractTextExtractionService(textract);
         var textractAsyncExtractionService = new TextractAsyncExtractionService(textract, textractAsyncOptions);
+        var storageProvider = new S3StorageService(amazonS3, s3Options);
+        var documentProcessor = new AwsDocumentProcessor(
+            textExtractionService,
+            textractTextExtractionService,
+            textractAsyncExtractionService,
+            storageProvider);
 
         var chunkingService = new ChunkingService();
         var embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions);
@@ -58,6 +69,7 @@ public static class AwsIngestionComposition
 
         return new AwsIngestionServices
         {
+            DocumentProcessor = documentProcessor,
             AmazonS3 = amazonS3,
             TextExtractionService = textExtractionService,
             TextractTextExtractionService = textractTextExtractionService,

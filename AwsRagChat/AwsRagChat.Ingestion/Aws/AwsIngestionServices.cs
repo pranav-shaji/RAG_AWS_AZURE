@@ -7,6 +7,8 @@ namespace AwsRagChat.Ingestion.Aws;
 
 public sealed class AwsIngestionServices
 {
+    public required IDocumentProcessor DocumentProcessor { get; init; }
+
     public required IAmazonS3 AmazonS3 { get; init; }
 
     public required TextExtractionService TextExtractionService { get; init; }
