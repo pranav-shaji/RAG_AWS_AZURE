@@ -1,5 +1,6 @@
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Ingestion.Models;
+
 namespace AwsRagChat.Ingestion.Services;
 
 public sealed class DocumentIngestionPipeline :
@@ -7,20 +8,20 @@ public sealed class DocumentIngestionPipeline :
 {
     private readonly ChunkingService _chunkingService;
     private readonly IEmbeddingProvider _embeddingProvider;
-    private readonly ChunkPersistenceService _chunkPersistenceService;
+    private readonly IChunkRepository _chunkRepository;
     private readonly IDocumentStatusService _documentStatusService;
     private readonly IVectorStore _vectorStore;
 
     public DocumentIngestionPipeline(
         ChunkingService chunkingService,
         IEmbeddingProvider embeddingProvider,
-        ChunkPersistenceService chunkPersistenceService,
+        IChunkRepository chunkRepository,
         IDocumentStatusService documentStatusService,
         IVectorStore vectorStore)
     {
         _chunkingService = chunkingService;
         _embeddingProvider = embeddingProvider;
-        _chunkPersistenceService = chunkPersistenceService;
+        _chunkRepository = chunkRepository;
         _documentStatusService = documentStatusService;
         _vectorStore = vectorStore;
     }
@@ -117,7 +118,7 @@ public sealed class DocumentIngestionPipeline :
 
         log?.Invoke("Saving chunks to DynamoDB.");
 
-        await _chunkPersistenceService.SaveChunksAsync(
+        await _chunkRepository.SaveChunksAsync(
             chunks,
             cancellationToken);
 

@@ -7,8 +7,10 @@ using Amazon.Textract;
 using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Ingestion.Options;
 using AwsRagChat.Ingestion.Services;
+using AwsRagChat.Infrastructure.Persistence;
 using AwsRagChat.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
+using InfrastructureDynamoDbOptions = AwsRagChat.Infrastructure.Options.DynamoDbOptions;
 
 namespace AwsRagChat.Ingestion.Handlers;
 
@@ -31,6 +33,9 @@ public sealed class S3DocumentIngestionFunction
         var dynamoDbOptions = Microsoft.Extensions.Options.Options.Create(
             configuration.GetSection(DynamoDbOptions.SectionName).Get<DynamoDbOptions>() ?? new DynamoDbOptions());
 
+        var infrastructureDynamoDbOptions = Microsoft.Extensions.Options.Options.Create(
+            configuration.GetSection(InfrastructureDynamoDbOptions.SectionName).Get<InfrastructureDynamoDbOptions>() ?? new InfrastructureDynamoDbOptions());
+
         var bedrockOptions = Microsoft.Extensions.Options.Options.Create(
             configuration.GetSection(BedrockOptions.SectionName).Get<BedrockOptions>() ?? new BedrockOptions());
 
@@ -49,7 +54,7 @@ public sealed class S3DocumentIngestionFunction
 
         var chunkingService = new ChunkingService();
         var embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions);
-        var chunkPersistenceService = new ChunkPersistenceService(dynamoDb, dynamoDbOptions);
+        var chunkRepository = new DynamoDbChunkRepository(dynamoDb, infrastructureDynamoDbOptions);
 
         _documentStatusService = new DocumentStatusService(
             dynamoDb,
@@ -60,7 +65,7 @@ public sealed class S3DocumentIngestionFunction
         _documentIngestionPipeline = new DocumentIngestionPipeline(
             chunkingService,
             embeddingBatchService,
-            chunkPersistenceService,
+            chunkRepository,
             _documentStatusService,
             openSearchService);
     }

@@ -6,9 +6,11 @@ using Amazon.Textract;
 using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Ingestion.Options;
 using AwsRagChat.Ingestion.Services;
+using AwsRagChat.Infrastructure.Persistence;
 using AwsRagChat.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using System.Text.Json;
+using InfrastructureDynamoDbOptions = AwsRagChat.Infrastructure.Options.DynamoDbOptions;
 
 namespace AwsRagChat.Ingestion.Handlers;
 
@@ -30,6 +32,9 @@ public sealed class TextractCompletionFunction
         var dynamoDbOptions = Microsoft.Extensions.Options.Options.Create(
             _configuration.GetSection(DynamoDbOptions.SectionName).Get<DynamoDbOptions>() ?? new DynamoDbOptions());
 
+        var infrastructureDynamoDbOptions = Microsoft.Extensions.Options.Options.Create(
+            _configuration.GetSection(InfrastructureDynamoDbOptions.SectionName).Get<InfrastructureDynamoDbOptions>() ?? new InfrastructureDynamoDbOptions());
+
         var bedrockOptions = Microsoft.Extensions.Options.Options.Create(
             _configuration.GetSection(BedrockOptions.SectionName).Get<BedrockOptions>() ?? new BedrockOptions());
 
@@ -44,7 +49,7 @@ public sealed class TextractCompletionFunction
 
         var chunkingService = new ChunkingService();
         var embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions);
-        var chunkPersistenceService = new ChunkPersistenceService(dynamoDb, dynamoDbOptions);
+        var chunkRepository = new DynamoDbChunkRepository(dynamoDb, infrastructureDynamoDbOptions);
 
         _documentStatusService = new DocumentStatusService(
             dynamoDb,
@@ -55,7 +60,7 @@ public sealed class TextractCompletionFunction
         _documentIngestionPipeline = new DocumentIngestionPipeline(
             chunkingService,
             embeddingBatchService,
-            chunkPersistenceService,
+            chunkRepository,
             _documentStatusService,
             openSearchService);
     }
