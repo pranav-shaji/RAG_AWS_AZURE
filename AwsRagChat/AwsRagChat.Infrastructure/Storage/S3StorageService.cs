@@ -1,6 +1,7 @@
 ﻿using Amazon.S3;
 using Amazon.S3.Model;
 using AwsRagChat.Application.Interfaces;
+using AwsRagChat.Application.Models;
 using AwsRagChat.Infrastructure.Options;
 using Microsoft.Extensions.Options;
 
@@ -67,5 +68,35 @@ public sealed class S3StorageService : IStorageProvider
         };
 
         return Task.FromResult(_amazonS3.GetPreSignedURL(request));
+    }
+
+    public async Task<StorageObjectReadResult> OpenReadAsync(
+        StorageObjectReadRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request is null)
+            throw new ArgumentNullException(nameof(request));
+
+        if (string.IsNullOrWhiteSpace(request.ObjectKey))
+            throw new ArgumentException("Storage object key is required.", nameof(request));
+
+        var bucketName = string.IsNullOrWhiteSpace(request.BucketOrContainerName)
+            ? _s3Options.BucketName
+            : request.BucketOrContainerName;
+
+        if (string.IsNullOrWhiteSpace(bucketName))
+            throw new InvalidOperationException("S3 bucket name is not configured.");
+
+        var response = await _amazonS3.GetObjectAsync(
+            bucketName,
+            request.ObjectKey,
+            cancellationToken);
+
+        return new StorageObjectReadResult
+        {
+            Content = response.ResponseStream,
+            ContentType = response.Headers.ContentType,
+            ContentLength = response.Headers.ContentLength
+        };
     }
 }
