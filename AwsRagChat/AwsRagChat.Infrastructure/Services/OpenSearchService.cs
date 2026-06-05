@@ -1,4 +1,4 @@
-﻿using Amazon;
+using Amazon;
 using Amazon.Runtime;
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Domain.Entities;
@@ -77,7 +77,7 @@ public sealed class OpenSearchService : IVectorStore
             documentId = chunk.DocumentId,
             chunkId = chunk.ChunkId,
             fileName = chunk.FileName,
-            s3Key = chunk.S3Key,
+            s3Key = chunk.StorageKey,
             pageNumber = chunk.PageNumber,
             section = chunk.Section,
             heading = chunk.Heading,
@@ -95,10 +95,10 @@ public sealed class OpenSearchService : IVectorStore
             .Refresh(Refresh.WaitFor));
 
         if (!response.IsValid)
-            throw new InvalidOperationException($"OpenSearch indexing failed: {response.DebugInformation}");
+            throw new InvalidOperationException($"Vector search indexing failed: {response.DebugInformation}");
 
         _logger?.LogInformation(
-            "Indexed chunk into OpenSearch. Index={IndexName}, UserId={OwnerUserId}, DocumentId={DocumentId}, ChunkId={ChunkId}",
+            "Indexed chunk into vector store. Index={IndexName}, UserId={OwnerUserId}, DocumentId={DocumentId}, ChunkId={ChunkId}",
             _indexName,
             chunk.OwnerUserId,
             chunk.DocumentId,
@@ -125,7 +125,7 @@ public sealed class OpenSearchService : IVectorStore
             throw new ArgumentException("Current user role is required.", nameof(currentUserRole));
 
         _logger?.LogInformation(
-            "OpenSearch vector search started. Index={IndexName}, UserId={OwnerUserId}, Role={CurrentUserRole}, DocumentId={DocumentId}, SharedAdminScope={SharedAdminScope}, SharedDocumentCount={SharedDocumentCount}, TopK={TopK}, Dimensions={Dimensions}",
+            "Vector search started. Index={IndexName}, UserId={OwnerUserId}, Role={CurrentUserRole}, DocumentId={DocumentId}, SharedAdminScope={SharedAdminScope}, SharedDocumentCount={SharedDocumentCount}, TopK={TopK}, Dimensions={Dimensions}",
             _indexName,
             ownerUserId,
             currentUserRole,
@@ -226,12 +226,12 @@ public sealed class OpenSearchService : IVectorStore
         stopwatch.Stop();
 
         if (!response.Success)
-            throw new InvalidOperationException($"OpenSearch kNN search failed: {response.DebugInformation}");
+            throw new InvalidOperationException($"Vector search kNN query failed: {response.DebugInformation}");
 
         var results = ParseSearchResults(response.Body);
 
         _logger?.LogInformation(
-            "OpenSearch vector search completed. Index={IndexName}, UserId={OwnerUserId}, Role={CurrentUserRole}, DocumentId={DocumentId}, SharedAdminScope={SharedAdminScope}, SharedDocumentCount={SharedDocumentCount}, ResultCount={ResultCount}, DurationMs={DurationMs}",
+            "Vector search completed. Index={IndexName}, UserId={OwnerUserId}, Role={CurrentUserRole}, DocumentId={DocumentId}, SharedAdminScope={SharedAdminScope}, SharedDocumentCount={SharedDocumentCount}, ResultCount={ResultCount}, DurationMs={DurationMs}",
             _indexName,
             ownerUserId,
             currentUserRole,
@@ -358,7 +358,7 @@ public sealed class OpenSearchService : IVectorStore
                 DocumentId = GetString(source, "documentId"),
                 ChunkId = GetString(source, "chunkId"),
                 FileName = GetString(source, "fileName"),
-                S3Key = GetString(source, "s3Key"),
+                StorageKey = GetString(source, "s3Key"),
                 PageNumber = GetInt(source, "pageNumber"),
                 Section = GetString(source, "section"),
                 Heading = GetString(source, "heading"),

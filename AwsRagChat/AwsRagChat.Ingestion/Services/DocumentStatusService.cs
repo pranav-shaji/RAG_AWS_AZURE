@@ -1,4 +1,4 @@
-﻿using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 using AwsRagChat.Application.Interfaces;
 using System.Globalization;
@@ -22,14 +22,14 @@ public sealed class DocumentStatusService : IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         CancellationToken cancellationToken = default)
     {
         await UpdateStatusAsync(
             documentId,
             ownerUserId,
             fileName,
-            s3Key,
+            storageKey,
             "UPLOADED",
             null,
             null,
@@ -42,14 +42,14 @@ public sealed class DocumentStatusService : IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         CancellationToken cancellationToken = default)
     {
         await UpdateStatusAsync(
             documentId,
             ownerUserId,
             fileName,
-            s3Key,
+            storageKey,
             "PROCESSING",
             null,
             "Document processing started.",
@@ -62,7 +62,7 @@ public sealed class DocumentStatusService : IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         string textractJobId,
         CancellationToken cancellationToken = default)
     {
@@ -70,7 +70,7 @@ public sealed class DocumentStatusService : IDocumentStatusService
             documentId,
             ownerUserId,
             fileName,
-            s3Key,
+            storageKey,
             "OCR_STARTED",
             textractJobId,
             "Textract OCR job started.",
@@ -83,7 +83,7 @@ public sealed class DocumentStatusService : IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         string textractJobId,
         int chunkCount,
         int pageCount,
@@ -93,7 +93,7 @@ public sealed class DocumentStatusService : IDocumentStatusService
             documentId,
             ownerUserId,
             fileName,
-            s3Key,
+            storageKey,
             "OCR_COMPLETED",
             textractJobId,
             $"OCR completed. Pages: {pageCount}. Chunks created: {chunkCount}",
@@ -106,14 +106,14 @@ public sealed class DocumentStatusService : IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         CancellationToken cancellationToken = default)
     {
         await UpdateStatusAsync(
             documentId,
             ownerUserId,
             fileName,
-            s3Key,
+            storageKey,
             "EMBEDDING",
             null,
             "Generating embeddings.",
@@ -126,17 +126,17 @@ public sealed class DocumentStatusService : IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         CancellationToken cancellationToken = default)
     {
         await UpdateStatusAsync(
             documentId,
             ownerUserId,
             fileName,
-            s3Key,
+            storageKey,
             "INDEXING",
             null,
-            "Indexing chunks into OpenSearch.",
+            "Indexing chunks into vector store.",
             null,
             null,
             cancellationToken);
@@ -146,7 +146,7 @@ public sealed class DocumentStatusService : IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         int chunkCount,
         int pageCount,
         CancellationToken cancellationToken = default)
@@ -155,7 +155,7 @@ public sealed class DocumentStatusService : IDocumentStatusService
             documentId,
             ownerUserId,
             fileName,
-            s3Key,
+            storageKey,
             "INDEXED",
             null,
             $"Document indexed successfully. Pages: {pageCount}. Total chunks: {chunkCount}",
@@ -168,7 +168,7 @@ public sealed class DocumentStatusService : IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         string errorMessage,
         CancellationToken cancellationToken = default)
     {
@@ -176,7 +176,7 @@ public sealed class DocumentStatusService : IDocumentStatusService
             documentId,
             ownerUserId,
             fileName,
-            s3Key,
+            storageKey,
             "FAILED",
             null,
             errorMessage,
@@ -245,7 +245,7 @@ public sealed class DocumentStatusService : IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         string status,
         string? textractJobId,
         string? message,
@@ -278,7 +278,7 @@ public sealed class DocumentStatusService : IDocumentStatusService
             [":status"] = new AttributeValue { S = status },
             [":ownerUserId"] = new AttributeValue { S = ownerUserId },
             [":fileName"] = new AttributeValue { S = fileName },
-            [":s3Key"] = new AttributeValue { S = s3Key },
+            [":s3Key"] = new AttributeValue { S = storageKey },
             [":updatedAtUtc"] = new AttributeValue { S = now }
         };
 

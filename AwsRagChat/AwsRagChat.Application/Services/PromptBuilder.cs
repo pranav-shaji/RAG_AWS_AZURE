@@ -11,7 +11,7 @@ public static class PromptBuilder
         var sb = new StringBuilder();
 
         sb.AppendLine("You summarize the available enterprise knowledge areas using ONLY the headings, sections, and snippets below.");
-        sb.AppendLine("Do not use outside knowledge. Do not invent topics. Do not mention document names, file names, document IDs, S3 keys, source labels, or citations.");
+        sb.AppendLine("Do not use outside knowledge. Do not invent topics. Do not mention document names, file names, document IDs, storage keys, source labels, or citations.");
         sb.AppendLine("Return a short answer that starts exactly with:");
         sb.AppendLine("I can help with these knowledge areas available in the enterprise knowledge base:");
         sb.AppendLine("Then provide 3 to 7 concise bullet points. Use broad topic areas, not file names.");

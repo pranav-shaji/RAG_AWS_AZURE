@@ -13,7 +13,7 @@ public sealed class ChunkingService
     public List<DocumentChunk> CreateChunks(
         string documentId,
         string fileName,
-        string s3Key,
+        string storageKey,
         ExtractedDocument extractedDocument,
         int maxChunkLength = 1200,
         int overlapLength = 180,
@@ -54,7 +54,7 @@ public sealed class ChunkingService
                     DocumentId = documentId,
                     ChunkId = $"chunk-{chunkOrder:D4}",
                     FileName = fileName,
-                    S3Key = s3Key,
+                    StorageKey = storageKey,
                     PageNumber = page.PageNumber,
                     Section = heading,
                     Heading = heading,

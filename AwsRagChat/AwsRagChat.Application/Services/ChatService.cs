@@ -935,14 +935,14 @@
             try
             {
                 return await _storageService.CreateReadUrlAsync(
-                    document.S3Key,
+                    document.StorageKey,
                     TimeSpan.FromMinutes(15),
                     cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 // Figure extraction must never fail the chat turn because a preview URL cannot be created.
-                _logger.LogWarning(ex, "Could not create image/figure preview URL. DocumentId={DocumentId}, S3Key={S3Key}", document.DocumentId, document.S3Key);
+                _logger.LogWarning(ex, "Could not create image/figure preview URL. DocumentId={DocumentId}, StorageKey={StorageKey}", document.DocumentId, document.StorageKey);
                 return string.Empty;
             }
         }

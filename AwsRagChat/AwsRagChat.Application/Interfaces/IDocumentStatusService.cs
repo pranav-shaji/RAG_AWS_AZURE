@@ -6,21 +6,21 @@ public interface IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         CancellationToken cancellationToken = default);
 
     Task MarkProcessingAsync(
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         CancellationToken cancellationToken = default);
 
     Task MarkOcrStartedAsync(
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         string textractJobId,
         CancellationToken cancellationToken = default);
 
@@ -28,7 +28,7 @@ public interface IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         string textractJobId,
         int chunkCount,
         int pageCount,
@@ -38,21 +38,21 @@ public interface IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         CancellationToken cancellationToken = default);
 
     Task MarkIndexingStartedAsync(
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         CancellationToken cancellationToken = default);
 
     Task MarkIndexedAsync(
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         int chunkCount,
         int pageCount,
         CancellationToken cancellationToken = default);
@@ -61,7 +61,7 @@ public interface IDocumentStatusService
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         string errorMessage,
         CancellationToken cancellationToken = default);
 

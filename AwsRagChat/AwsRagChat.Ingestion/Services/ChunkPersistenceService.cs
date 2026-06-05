@@ -1,4 +1,4 @@
-﻿using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 using AwsRagChat.Domain.Entities;
 using AwsRagChat.Ingestion.Options;
@@ -31,7 +31,7 @@ public sealed class ChunkPersistenceService
                 ["DocumentId"] = new AttributeValue { S = chunk.DocumentId },
                 ["ChunkId"] = new AttributeValue { S = chunk.ChunkId },
                 ["FileName"] = new AttributeValue { S = chunk.FileName },
-                ["S3Key"] = new AttributeValue { S = chunk.S3Key },
+                ["S3Key"] = new AttributeValue { S = chunk.StorageKey },
                 ["PageNumber"] = new AttributeValue { N = chunk.PageNumber.ToString() },
                 ["Section"] = new AttributeValue { S = chunk.Section ?? string.Empty },
                 ["Heading"] = new AttributeValue { S = chunk.Heading ?? string.Empty },

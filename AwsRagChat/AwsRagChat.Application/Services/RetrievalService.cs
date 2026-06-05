@@ -247,12 +247,12 @@ public sealed class RetrievalService
             embeddingStopwatch.ElapsedMilliseconds);
 
         IReadOnlyList<DocumentChunk> vectorChunks;
-        var openSearchStopwatch = Stopwatch.StartNew();
+        var vectorSearchStopwatch = Stopwatch.StartNew();
 
         try
         {
             _logger.LogInformation(
-                "Retrieval timing. Stage=OpenSearchStart, UserId={OwnerUserId}, DocumentId={DocumentId}, SharedGlobalMode={SharedGlobalMode}",
+                "Retrieval timing. Stage=VectorSearchStart, UserId={OwnerUserId}, DocumentId={DocumentId}, SharedGlobalMode={SharedGlobalMode}",
                 ownerUserId,
                 documentId ?? "(all)",
                 searchSharedAdminDocuments);
@@ -266,27 +266,27 @@ public sealed class RetrievalService
                 sharedDocumentIds: sharedDocumentIds,
                 currentUserRole: currentUserRole,
                 cancellationToken: cancellationToken);
-            openSearchStopwatch.Stop();
+            vectorSearchStopwatch.Stop();
 
             _logger.LogInformation(
-                "Retrieval timing. Stage=OpenSearchEnd, DurationMs={DurationMs}, ResultCount={ResultCount}, Success={Success}",
-                openSearchStopwatch.ElapsedMilliseconds,
+                "Retrieval timing. Stage=VectorSearchEnd, DurationMs={DurationMs}, ResultCount={ResultCount}, Success={Success}",
+                vectorSearchStopwatch.ElapsedMilliseconds,
                 vectorChunks.Count,
                 true);
         }
         catch (Exception ex)
         {
-            openSearchStopwatch.Stop();
+            vectorSearchStopwatch.Stop();
 
             _logger.LogInformation(
-                "Retrieval timing. Stage=OpenSearchEnd, DurationMs={DurationMs}, ResultCount={ResultCount}, Success={Success}",
-                openSearchStopwatch.ElapsedMilliseconds,
+                "Retrieval timing. Stage=VectorSearchEnd, DurationMs={DurationMs}, ResultCount={ResultCount}, Success={Success}",
+                vectorSearchStopwatch.ElapsedMilliseconds,
                 0,
                 false);
 
             _logger.LogWarning(
                 ex,
-                "OpenSearch retrieval failed; falling back to DynamoDB chunk search. UserId={OwnerUserId}, DocumentId={DocumentId}",
+                "Vector search retrieval failed; falling back to DynamoDB chunk search. UserId={OwnerUserId}, DocumentId={DocumentId}",
                 ownerUserId,
                 documentId ?? "(all)");
 
@@ -295,7 +295,7 @@ public sealed class RetrievalService
 
         var rankingStopwatch = Stopwatch.StartNew();
         _logger.LogInformation(
-            "Retrieval timing. Stage=HybridRankingStart, OpenSearchHits={OpenSearchHits}",
+            "Retrieval timing. Stage=HybridRankingStart, VectorSearchHits={VectorSearchHits}",
             vectorChunks.Count);
 
         var relevantChunks = await HybridRankChunksAsync(
@@ -345,9 +345,9 @@ public sealed class RetrievalService
         Stopwatch totalStopwatch,
         bool allowContextCitationFallback = false)
     {
-        var bedrockStopwatch = Stopwatch.StartNew();
+        var generationStopwatch = Stopwatch.StartNew();
         _logger.LogInformation(
-            "Retrieval timing. Stage=BedrockGenerationStart, ChunkCount={ChunkCount}",
+            "Retrieval timing. Stage=GenerationStart, ChunkCount={ChunkCount}",
             relevantChunks.Count);
 
         var answerText = await _chatCompletionService.GenerateAnswerAsync(
@@ -357,7 +357,7 @@ public sealed class RetrievalService
             conversationSummary,
             outputFormat,
             cancellationToken);
-        bedrockStopwatch.Stop();
+        generationStopwatch.Stop();
 
         var citationStopwatch = Stopwatch.StartNew();
         var citations = IsGroundedRefusal(answerText)
@@ -368,8 +368,8 @@ public sealed class RetrievalService
         citationStopwatch.Stop();
 
         _logger.LogInformation(
-            "Retrieval timing. Stage=BedrockGenerationEnd, BedrockDurationMs={BedrockDurationMs}, CitationDurationMs={CitationDurationMs}, CitationCount={CitationCount}, CitationPages={CitationPages}",
-            bedrockStopwatch.ElapsedMilliseconds,
+            "Retrieval timing. Stage=GenerationEnd, GenerationDurationMs={GenerationDurationMs}, CitationDurationMs={CitationDurationMs}, CitationCount={CitationCount}, CitationPages={CitationPages}",
+            generationStopwatch.ElapsedMilliseconds,
             citationStopwatch.ElapsedMilliseconds,
             citations.Count,
             string.Join(",", citations.Select(citation => citation.PageNumber).Where(page => page > 0).Distinct().OrderBy(page => page)));
@@ -519,21 +519,21 @@ public sealed class RetrievalService
                 {
                     Chunk = chunk,
                     KeywordScore = ComputeKeywordScore(keywordProfile, chunk),
-                    OpenSearchRankBoost = Math.Max(0, usableVectorChunks.Count - index) * 0.01
+                    VectorSearchRankBoost = Math.Max(0, usableVectorChunks.Count - index) * 0.01
                 })
                 .Select(x => new
                 {
                     x.Chunk,
                     x.KeywordScore,
-                    x.OpenSearchRankBoost,
-                    TotalScore = x.KeywordScore + x.OpenSearchRankBoost
+                    x.VectorSearchRankBoost,
+                    TotalScore = x.KeywordScore + x.VectorSearchRankBoost
                 })
                 .OrderByDescending(x => x.TotalScore)
                 .ThenBy(x => x.Chunk.ChunkOrder)
                 .ToList();
 
             _logger.LogInformation(
-                "Hybrid retrieval used OpenSearch semantic hits without DynamoDB full-chunk scan. UserId={OwnerUserId}, DocumentId={DocumentId}, OpenSearchHits={OpenSearchHits}, ReturnedChunks={ReturnedChunks}",
+                "Hybrid retrieval used vector search semantic hits without database full-chunk scan. UserId={OwnerUserId}, DocumentId={DocumentId}, VectorSearchHits={VectorSearchHits}, ReturnedChunks={ReturnedChunks}",
                 ownerUserId,
                 documentId ?? "(all)",
                 vectorChunks.Count,
@@ -550,7 +550,7 @@ public sealed class RetrievalService
 
         var loadStopwatch = Stopwatch.StartNew();
         _logger.LogInformation(
-            "Retrieval timing. Stage=DynamoDbFallbackChunkLoadStart, UserId={OwnerUserId}, DocumentId={DocumentId}, SharedAdminDocumentCount={SharedAdminDocumentCount}, SelectedFallbackDocumentCount={SelectedFallbackDocumentCount}, MaxFallbackCandidateChunks={MaxFallbackCandidateChunks}",
+            "Retrieval timing. Stage=DatabaseFallbackChunkLoadStart, UserId={OwnerUserId}, DocumentId={DocumentId}, SharedAdminDocumentCount={SharedAdminDocumentCount}, SelectedFallbackDocumentCount={SelectedFallbackDocumentCount}, MaxFallbackCandidateChunks={MaxFallbackCandidateChunks}",
             ownerUserId,
             documentId ?? "(all)",
             sharedAdminDocuments.Count,
@@ -567,14 +567,14 @@ public sealed class RetrievalService
         loadStopwatch.Stop();
 
         _logger.LogInformation(
-            "Retrieval timing. Stage=DynamoDbFallbackChunkLoadEnd, DurationMs={DurationMs}, LoadedChunkCount={LoadedChunkCount}",
+            "Retrieval timing. Stage=DatabaseFallbackChunkLoadEnd, DurationMs={DurationMs}, LoadedChunkCount={LoadedChunkCount}",
             loadStopwatch.ElapsedMilliseconds,
             persistedChunks.Count);
 
         if (persistedChunks.Count == 0)
         {
             _logger.LogWarning(
-                "No persisted chunks were available for hybrid reranking. Falling back to OpenSearch hits. UserId={OwnerUserId}, DocumentId={DocumentId}",
+                "No persisted chunks were available for hybrid reranking. Falling back to vector search hits. UserId={OwnerUserId}, DocumentId={DocumentId}",
                 ownerUserId,
                 documentId ?? "(all)");
 
@@ -603,15 +603,15 @@ public sealed class RetrievalService
                     ? CosineSimilarity(queryEmbedding, queryEmbeddingMagnitude, chunk.Embedding)
                     : 0,
                 KeywordScore = ComputeKeywordScore(keywordProfile, chunk),
-                OpenSearchBoost = vectorHitIds.Contains(chunk.ChunkId) ? 0.15 : 0
+                VectorSearchBoost = vectorHitIds.Contains(chunk.ChunkId) ? 0.15 : 0
             })
             .Select(x => new
             {
                 x.Chunk,
                 x.VectorScore,
                 x.KeywordScore,
-                x.OpenSearchBoost,
-                TotalScore = (x.VectorScore * 0.90) + (x.KeywordScore * 0.10) + x.OpenSearchBoost
+                x.VectorSearchBoost,
+                TotalScore = (x.VectorScore * 0.90) + (x.KeywordScore * 0.10) + x.VectorSearchBoost
             })
             .OrderByDescending(x => x.TotalScore)
             .ThenBy(x => x.Chunk.ChunkOrder)
@@ -639,19 +639,19 @@ public sealed class RetrievalService
         foreach (var ranked in thresholdedChunks.Take(8))
         {
             _logger.LogInformation(
-                "Hybrid retrieval hit. ChunkId={ChunkId}, Page={PageNumber}, Heading={Heading}, VectorScore={VectorScore:F4}, KeywordScore={KeywordScore:F4}, OpenSearchBoost={OpenSearchBoost:F2}, TotalScore={TotalScore:F4}, Preview={Preview}",
+                "Hybrid retrieval hit. ChunkId={ChunkId}, Page={PageNumber}, Heading={Heading}, VectorScore={VectorScore:F4}, KeywordScore={KeywordScore:F4}, VectorSearchBoost={VectorSearchBoost:F2}, TotalScore={TotalScore:F4}, Preview={Preview}",
                 ranked.Chunk.ChunkId,
                 ranked.Chunk.PageNumber,
                 string.IsNullOrWhiteSpace(ranked.Chunk.Heading) ? ranked.Chunk.Section : ranked.Chunk.Heading,
                 ranked.VectorScore,
                 ranked.KeywordScore,
-                ranked.OpenSearchBoost,
+                ranked.VectorSearchBoost,
                 ranked.TotalScore,
                 BuildCitationSnippet(ranked.Chunk.Text));
         }
 
         _logger.LogInformation(
-            "Hybrid retrieval completed. UserId={OwnerUserId}, DocumentId={DocumentId}, CandidateChunks={CandidateChunks}, OpenSearchHits={OpenSearchHits}, ReturnedChunks={ReturnedChunks}",
+            "Hybrid retrieval completed. UserId={OwnerUserId}, DocumentId={DocumentId}, CandidateChunks={CandidateChunks}, VectorSearchHits={VectorSearchHits}, ReturnedChunks={ReturnedChunks}",
             ownerUserId,
             documentId ?? "(all)",
             persistedChunks.Count,
@@ -1061,7 +1061,7 @@ public sealed class RetrievalService
         if (keywordProfile.Terms.Count == 0)
             return 0;
 
-        var metadata = NormalizeForSearch($"{document.FileName} {document.S3Key}");
+        var metadata = NormalizeForSearch($"{document.FileName} {document.StorageKey}");
         if (string.IsNullOrWhiteSpace(metadata))
             return 0;
 
