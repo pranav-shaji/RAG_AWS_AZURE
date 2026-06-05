@@ -17,23 +17,109 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        services.Configure<S3Options>(
-            configuration.GetSection(S3Options.SectionName));
+        services.Configure<S3Options>(options =>
+        {
+            // First load from legacy
+            configuration.GetSection(S3Options.SectionName).Bind(options);
+
+            // Override/fallback with Storage section
+            var storageSection = configuration.GetSection("Storage");
+            if (storageSection.Exists())
+            {
+                var bucket = storageSection["BucketOrContainerName"];
+                if (!string.IsNullOrEmpty(bucket))
+                {
+                    options.BucketName = bucket;
+                }
+            }
+        });
 
         services.Configure<DynamoDbOptions>(
             configuration.GetSection(DynamoDbOptions.SectionName));
 
-        services.Configure<BedrockOptions>(
-            configuration.GetSection(BedrockOptions.SectionName));
+        services.Configure<BedrockOptions>(options =>
+        {
+            // First load from legacy Bedrock section
+            configuration.GetSection(BedrockOptions.SectionName).Bind(options);
+
+            // Override/fallback with Embedding:ModelId if present
+            var embeddingModelId = configuration["Embedding:ModelId"];
+            if (!string.IsNullOrEmpty(embeddingModelId))
+            {
+                options.EmbeddingModelId = embeddingModelId;
+            }
+
+            // Override/fallback with Chat:ModelId if present
+            var chatModelId = configuration["Chat:ModelId"];
+            if (!string.IsNullOrEmpty(chatModelId))
+            {
+                options.ChatModelId = chatModelId;
+            }
+        });
 
         services.Configure<ConversationStorageOptions>(
             configuration.GetSection(ConversationStorageOptions.SectionName));
 
-        services.Configure<CognitoOptions>(
-            configuration.GetSection(CognitoOptions.SectionName));
+        services.Configure<CognitoOptions>(options =>
+        {
+            // First load from legacy Cognito section
+            configuration.GetSection(CognitoOptions.SectionName).Bind(options);
 
-        services.Configure<IdentityOptions>(
-            configuration.GetSection(IdentityOptions.SectionName));
+            // Fallback from neutral Identity section
+            var identitySection = configuration.GetSection("Identity");
+            if (identitySection.Exists())
+            {
+                var clientId = identitySection["ClientId"];
+                if (!string.IsNullOrEmpty(clientId))
+                {
+                    options.AppClientId = clientId;
+                }
+
+                var authority = identitySection["Authority"];
+                if (!string.IsNullOrEmpty(authority))
+                {
+                    try
+                    {
+                        var uri = new Uri(authority);
+                        var pathSegments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                        if (pathSegments.Length > 0)
+                        {
+                            options.UserPoolId = pathSegments[^1];
+                        }
+
+                        var hostParts = uri.Host.Split('.');
+                        if (hostParts.Length > 1 && hostParts[0].Equals("cognito-idp", StringComparison.OrdinalIgnoreCase))
+                        {
+                            options.Region = hostParts[1];
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore parsing errors, keep legacy values
+                    }
+                }
+            }
+        });
+
+        services.Configure<IdentityOptions>(options =>
+        {
+            // First load from new Identity section
+            configuration.GetSection(IdentityOptions.SectionName).Bind(options);
+
+            // Fallback from legacy Cognito section
+            var cognitoSection = configuration.GetSection("Cognito");
+            if (cognitoSection.Exists())
+            {
+                if (string.IsNullOrEmpty(options.ClientId))
+                {
+                    options.ClientId = cognitoSection["AppClientId"] ?? string.Empty;
+                }
+                if (string.IsNullOrEmpty(options.Authority))
+                {
+                    options.Authority = cognitoSection["Authority"] ?? string.Empty;
+                }
+            }
+        });
 
         services.AddScoped<S3StorageService>();
 

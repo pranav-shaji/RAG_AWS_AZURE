@@ -25,12 +25,12 @@ public sealed class OpenSearchService : IVectorStore
     {
         _logger = logger;
 
-        var endpoint = config["OpenSearch:Endpoint"];
+        var endpoint = config["VectorStore:Endpoint"] ?? config["OpenSearch:Endpoint"];
         var region = config["AWS:Region"] ?? "us-east-1";
-        _indexName = config["OpenSearch:IndexName"] ?? "rag-index";
+        _indexName = config["VectorStore:IndexName"] ?? config["OpenSearch:IndexName"] ?? "rag-index";
 
         if (string.IsNullOrWhiteSpace(endpoint))
-            throw new InvalidOperationException("OpenSearch endpoint is missing.");
+            throw new InvalidOperationException("VectorStore / OpenSearch endpoint is missing.");
 
         var regionEndpoint = RegionEndpoint.GetBySystemName(region);
 

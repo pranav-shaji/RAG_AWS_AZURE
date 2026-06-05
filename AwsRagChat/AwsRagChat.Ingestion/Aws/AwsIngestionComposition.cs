@@ -24,14 +24,47 @@ public static class AwsIngestionComposition
         var infrastructureDynamoDbOptions = Microsoft.Extensions.Options.Options.Create(
             configuration.GetSection(InfrastructureDynamoDbOptions.SectionName).Get<InfrastructureDynamoDbOptions>() ?? new InfrastructureDynamoDbOptions());
 
-        var bedrockOptions = Microsoft.Extensions.Options.Options.Create(
-            configuration.GetSection(BedrockOptions.SectionName).Get<BedrockOptions>() ?? new BedrockOptions());
+        var bedrockOptionsObj = configuration.GetSection(BedrockOptions.SectionName).Get<BedrockOptions>() ?? new BedrockOptions();
+        var embeddingModelId = configuration["Embedding:ModelId"];
+        if (!string.IsNullOrEmpty(embeddingModelId))
+        {
+            bedrockOptionsObj.EmbeddingModelId = embeddingModelId;
+        }
+        var bedrockOptions = Microsoft.Extensions.Options.Options.Create(bedrockOptionsObj);
 
-        var textractAsyncOptions = Microsoft.Extensions.Options.Options.Create(
-            configuration.GetSection(TextractAsyncOptions.SectionName).Get<TextractAsyncOptions>() ?? new TextractAsyncOptions());
+        var textractAsyncOptionsObj = configuration.GetSection(TextractAsyncOptions.SectionName).Get<TextractAsyncOptions>() ?? new TextractAsyncOptions();
+        var docProcessingSection = configuration.GetSection("DocumentProcessing");
+        if (docProcessingSection.Exists())
+        {
+            var snsTopicArn = docProcessingSection["SnsTopicArn"];
+            if (!string.IsNullOrEmpty(snsTopicArn))
+            {
+                textractAsyncOptionsObj.SnsTopicArn = snsTopicArn;
+            }
+            var roleArn = docProcessingSection["TextractPublishRoleArn"];
+            if (!string.IsNullOrEmpty(roleArn))
+            {
+                textractAsyncOptionsObj.TextractPublishRoleArn = roleArn;
+            }
+            var jobTag = docProcessingSection["JobTag"];
+            if (!string.IsNullOrEmpty(jobTag))
+            {
+                textractAsyncOptionsObj.JobTag = jobTag;
+            }
+        }
+        var textractAsyncOptions = Microsoft.Extensions.Options.Options.Create(textractAsyncOptionsObj);
 
-        var s3Options = Microsoft.Extensions.Options.Options.Create(
-            configuration.GetSection(InfrastructureS3Options.SectionName).Get<InfrastructureS3Options>() ?? new InfrastructureS3Options());
+        var s3OptionsObj = configuration.GetSection(InfrastructureS3Options.SectionName).Get<InfrastructureS3Options>() ?? new InfrastructureS3Options();
+        var storageSection = configuration.GetSection("Storage");
+        if (storageSection.Exists())
+        {
+            var bucket = storageSection["BucketOrContainerName"];
+            if (!string.IsNullOrEmpty(bucket))
+            {
+                s3OptionsObj.BucketName = bucket;
+            }
+        }
+        var s3Options = Microsoft.Extensions.Options.Options.Create(s3OptionsObj);
 
         var amazonS3 = new AmazonS3Client();
         var dynamoDb = new AmazonDynamoDBClient();
