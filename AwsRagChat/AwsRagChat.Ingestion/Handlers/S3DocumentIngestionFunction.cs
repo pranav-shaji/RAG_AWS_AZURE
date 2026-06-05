@@ -1,7 +1,7 @@
 using Amazon.Lambda.Core;
 using Amazon.Lambda.S3Events;
-using Amazon.S3;
 using AwsRagChat.Application.Interfaces;
+using AwsRagChat.Application.Models;
 using AwsRagChat.Ingestion.Aws;
 using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Ingestion.Services;
@@ -11,12 +11,9 @@ namespace AwsRagChat.Ingestion.Handlers;
 
 public sealed class S3DocumentIngestionFunction
 {
-    private readonly IAmazonS3 _amazonS3;
-    private readonly TextExtractionService _textExtractionService;
-    private readonly TextractTextExtractionService _textractTextExtractionService;
-    private readonly TextractAsyncExtractionService _textractAsyncExtractionService;
+    private readonly IDocumentProcessor _documentProcessor;
     private readonly IDocumentStatusService _documentStatusService;
-    private readonly IIngestionPipeline<IngestionDocumentRequest, ExtractedDocument, IngestionPipelineResult> _documentIngestionPipeline;
+    private readonly IIngestionPipeline<IngestionDocumentRequest, AwsRagChat.Ingestion.Services.ExtractedDocument, IngestionPipelineResult> _documentIngestionPipeline;
 
     public S3DocumentIngestionFunction()
     {
@@ -27,10 +24,7 @@ public sealed class S3DocumentIngestionFunction
 
         var services = AwsIngestionComposition.Create(configuration);
 
-        _amazonS3 = services.AmazonS3;
-        _textExtractionService = services.TextExtractionService;
-        _textractTextExtractionService = services.TextractTextExtractionService;
-        _textractAsyncExtractionService = services.TextractAsyncExtractionService;
+        _documentProcessor = services.DocumentProcessor;
         _documentStatusService = services.DocumentStatusService;
         _documentIngestionPipeline = services.DocumentIngestionPipeline;
     }
@@ -82,53 +76,57 @@ public sealed class S3DocumentIngestionFunction
                     objectKey,
                     CancellationToken.None);
 
-                ExtractedDocument extracted;
-
-                if (_textExtractionService.CanExtractDirectly(fileName))
-                {
-                    using var getObjectResponse = await _amazonS3.GetObjectAsync(bucketName, objectKey);
-                    await using var responseStream = getObjectResponse.ResponseStream;
-
-                    extracted = await _textExtractionService.ExtractAsync(
-                        fileName,
-                        responseStream,
-                        CancellationToken.None);
-
-                    if (_textExtractionService.ShouldFallbackToTextract(fileName, extracted))
+                var processingResult = await _documentProcessor.ExtractAsync(
+                    new DocumentProcessingRequest
                     {
-                        context.Logger.LogLine("Fallback to Textract async OCR.");
+                        BucketOrContainerName = bucketName,
+                        ObjectKey = objectKey,
+                        FileName = fileName
+                    },
+                    CancellationToken.None);
 
-                        var jobId = await _textractAsyncExtractionService.StartDocumentTextDetectionAsync(
-                            bucketName,
-                            objectKey,
-                            CancellationToken.None);
-
-                        await _documentStatusService.MarkOcrStartedAsync(
-                            documentId,
-                            ownerUserId,
-                            fileName,
-                            objectKey,
-                            jobId,
-                            CancellationToken.None);
-
-                        context.Logger.LogLine($"Started Textract job: {jobId}");
-                        continue;
-                    }
-                }
-                else if (_textractTextExtractionService.CanExtractWithTextract(fileName))
+                if (processingResult.Status == DocumentProcessingStatus.OcrStarted)
                 {
-                    context.Logger.LogLine("Using Textract sync OCR for image document.");
+                    context.Logger.LogLine($"Fallback to Textract async OCR. Started job: {processingResult.OcrJobId}");
 
-                    extracted = await _textractTextExtractionService.ExtractFromS3Async(
-                        bucketName,
-                        objectKey,
+                    await _documentStatusService.MarkOcrStartedAsync(
+                        documentId,
+                        ownerUserId,
                         fileName,
+                        objectKey,
+                        processingResult.OcrJobId!,
                         CancellationToken.None);
+
+                    continue;
                 }
-                else
+
+                if (processingResult.Status == DocumentProcessingStatus.Unsupported)
                 {
-                    throw new NotSupportedException($"File type '{Path.GetExtension(fileName)}' is not supported.");
+                    throw new NotSupportedException(processingResult.Message ?? $"File type '{Path.GetExtension(fileName)}' is not supported.");
                 }
+
+                if (processingResult.Status == DocumentProcessingStatus.Failed)
+                {
+                    throw new InvalidOperationException(processingResult.Message ?? "Document extraction failed.");
+                }
+
+                if (processingResult.ExtractedDocument == null)
+                {
+                    throw new InvalidOperationException("No extracted document content was returned.");
+                }
+
+                var extracted = new AwsRagChat.Ingestion.Services.ExtractedDocument
+                {
+                    FullText = processingResult.ExtractedDocument.FullText,
+                    PageCount = processingResult.ExtractedDocument.PageCount,
+                    Pages = processingResult.ExtractedDocument.Pages
+                        .Select(p => new ExtractedPage
+                        {
+                            PageNumber = p.PageNumber,
+                            Text = p.Text
+                        })
+                        .ToList()
+                };
 
                 await _documentIngestionPipeline.ProcessExtractedDocumentAsync(
                     new IngestionDocumentRequest
