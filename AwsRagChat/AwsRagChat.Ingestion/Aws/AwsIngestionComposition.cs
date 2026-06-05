@@ -70,10 +70,6 @@ public static class AwsIngestionComposition
         return new AwsIngestionServices
         {
             DocumentProcessor = documentProcessor,
-            AmazonS3 = amazonS3,
-            TextExtractionService = textExtractionService,
-            TextractTextExtractionService = textractTextExtractionService,
-            TextractAsyncExtractionService = textractAsyncExtractionService,
             DocumentStatusService = documentStatusService,
             DocumentIngestionPipeline = documentIngestionPipeline
         };
