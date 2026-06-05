@@ -115,12 +115,12 @@ public sealed class UserApprovalService : IUserApprovalService
         if (user is null)
             throw new KeyNotFoundException("User was not found.");
 
-        var cognitoUsername = string.IsNullOrWhiteSpace(user.Email)
+        var identityUsername = string.IsNullOrWhiteSpace(user.Email)
             ? user.UserId
             : user.Email;
 
         await _userRoleService.SetRoleAsync(
-            cognitoUsername,
+            identityUsername,
             normalizedRole,
             cancellationToken);
 
