@@ -138,6 +138,21 @@ public static class DependencyInjection
             configuration.GetSection(AzureOpenAiOptions.SectionName).Bind(options);
         });
 
+        services.Configure<AzureAiSearchOptions>(options =>
+        {
+            var openSearchSection = configuration.GetSection("OpenSearch");
+            if (openSearchSection.Exists())
+            {
+                options.Endpoint = openSearchSection["Endpoint"] ?? string.Empty;
+                options.IndexName = openSearchSection["IndexName"] ?? "rag-index";
+            }
+
+            configuration.GetSection(AzureAiSearchOptions.SectionName).Bind(options);
+        });
+
+        services.AddScoped<AzureAiSearchVectorStore>();
+
+
         services.AddScoped<S3StorageService>();
 
         services.AddScoped<IStorageProvider>(provider =>
