@@ -1,4 +1,5 @@
-﻿using System.Security.Claims;
+using System.Security.Claims;
+using AwsRagChat.Infrastructure.Options;
 
 namespace AwsRagChat.Api.Security;
 
@@ -19,12 +20,15 @@ public static class ClaimsPrincipalExtensions
 
     public static string? GetFirstRole(this ClaimsPrincipal principal)
     {
-        return principal.FindAll("cognito:groups")
-                   .Select(claim => claim.Value)
-                   .FirstOrDefault()
+        return principal.FindAll(IdentityOptions.GroupsClaimType)
+                    .Select(claim => claim.Value)
+                    .FirstOrDefault()
+               ?? principal.FindAll("cognito:groups")
+                    .Select(claim => claim.Value)
+                    .FirstOrDefault()
                ?? principal.FindAll(ClaimTypes.Role)
-                   .Select(claim => claim.Value)
-                   .FirstOrDefault();
+                    .Select(claim => claim.Value)
+                    .FirstOrDefault();
     }
 
     public static string GetRequiredUserId(this ClaimsPrincipal principal)

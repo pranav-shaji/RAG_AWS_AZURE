@@ -1,4 +1,4 @@
-﻿using AwsRagChat.Application.Interfaces;
+using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Application.Services;
 using AwsRagChat.Infrastructure.AI;
 using AwsRagChat.Infrastructure.Options;
@@ -31,6 +31,9 @@ public static class DependencyInjection
 
         services.Configure<CognitoOptions>(
             configuration.GetSection(CognitoOptions.SectionName));
+
+        services.Configure<IdentityOptions>(
+            configuration.GetSection(IdentityOptions.SectionName));
 
         services.AddScoped<S3StorageService>();
 

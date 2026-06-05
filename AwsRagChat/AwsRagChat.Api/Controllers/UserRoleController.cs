@@ -1,7 +1,8 @@
-﻿using AwsRagChat.Api.Security;
+using AwsRagChat.Api.Security;
 using AwsRagChat.Application.DTOs;
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Application.Models;
+using AwsRagChat.Infrastructure.Options;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -33,6 +34,10 @@ public sealed class UserRoleController : ControllerBase
         // Read role directly from JWT claims.
         var role =
             User.Claims
+                .Where(x => x.Type == IdentityOptions.GroupsClaimType)
+                .Select(x => x.Value)
+                .FirstOrDefault()
+            ?? User.Claims
                 .Where(x => x.Type == "cognito:groups")
                 .Select(x => x.Value)
                 .FirstOrDefault()
@@ -76,6 +81,10 @@ public sealed class UserRoleController : ControllerBase
 
         var existingRole =
             User.Claims
+                .Where(x => x.Type == IdentityOptions.GroupsClaimType)
+                .Select(x => x.Value)
+                .FirstOrDefault()
+            ?? User.Claims
                 .Where(x => x.Type == "cognito:groups")
                 .Select(x => x.Value)
                 .FirstOrDefault();

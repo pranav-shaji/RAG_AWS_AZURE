@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
+using AwsRagChat.Infrastructure.Options;
 
 namespace AwsRagChat.Infrastructure.Aws;
 
@@ -12,23 +13,28 @@ public static class AwsAuthenticationExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        var cognitoAuthority = configuration["Cognito:Authority"];
-        var cognitoAppClientId = configuration["Cognito:AppClientId"];
+        var provider = configuration["Identity:Provider"] ?? "AWS";
+        var authority = configuration["Identity:Authority"] ?? configuration["Cognito:Authority"];
+        var clientId = configuration["Identity:ClientId"] ?? configuration["Cognito:AppClientId"];
+        var groupsClaim = configuration["Identity:GroupsClaim"] ?? "cognito:groups";
 
-        if (string.IsNullOrWhiteSpace(cognitoAuthority))
+        if (string.IsNullOrWhiteSpace(authority))
         {
-            throw new InvalidOperationException("Cognito:Authority is required.");
+            throw new InvalidOperationException("Identity authority is required.");
         }
 
-        if (string.IsNullOrWhiteSpace(cognitoAppClientId))
+        if (string.IsNullOrWhiteSpace(clientId))
         {
-            throw new InvalidOperationException("Cognito:AppClientId is required.");
+            throw new InvalidOperationException("Identity client ID is required.");
         }
+
+        // Initialize static claim mapping
+        IdentityOptions.GroupsClaimType = groupsClaim;
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             .AddJwtBearer(options =>
             {
-                options.Authority = cognitoAuthority;
+                options.Authority = authority;
 
                 options.TokenValidationParameters = new TokenValidationParameters
                 {
@@ -37,7 +43,7 @@ public static class AwsAuthenticationExtensions
                     ValidateLifetime = true,
                     ValidateIssuerSigningKey = true,
                     NameClaimType = "sub",
-                    RoleClaimType = "cognito:groups"
+                    RoleClaimType = groupsClaim
                 };
 
                 options.Events = new JwtBearerEvents
@@ -52,18 +58,22 @@ public static class AwsAuthenticationExtensions
                             return Task.CompletedTask;
                         }
 
-                        var tokenUse = principal.FindFirst("token_use")?.Value;
-                        if (!string.Equals(tokenUse, "access", StringComparison.OrdinalIgnoreCase))
+                        // Run strict Cognito validation only if the provider is AWS
+                        if (string.Equals(provider, "AWS", StringComparison.OrdinalIgnoreCase))
                         {
-                            context.Fail("Only Cognito access tokens are accepted.");
-                            return Task.CompletedTask;
-                        }
+                            var tokenUse = principal.FindFirst("token_use")?.Value;
+                            if (!string.Equals(tokenUse, "access", StringComparison.OrdinalIgnoreCase))
+                            {
+                                context.Fail("Only Cognito access tokens are accepted.");
+                                return Task.CompletedTask;
+                            }
 
-                        var clientId = principal.FindFirst("client_id")?.Value;
-                        if (!string.Equals(clientId, cognitoAppClientId, StringComparison.Ordinal))
-                        {
-                            context.Fail("Token client_id does not match the configured app client.");
-                            return Task.CompletedTask;
+                            var tokenClientId = principal.FindFirst("client_id")?.Value;
+                            if (!string.Equals(tokenClientId, clientId, StringComparison.Ordinal))
+                            {
+                                context.Fail("Token client_id does not match the configured app client.");
+                                return Task.CompletedTask;
+                            }
                         }
 
                         return Task.CompletedTask;
