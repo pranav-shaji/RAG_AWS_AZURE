@@ -121,6 +121,23 @@ public static class DependencyInjection
             }
         });
 
+        services.Configure<AzureOpenAiOptions>(options =>
+        {
+            var embeddingSection = configuration.GetSection("Embedding");
+            if (embeddingSection.Exists())
+            {
+                options.EmbeddingDeploymentName = embeddingSection["ModelId"] ?? string.Empty;
+            }
+
+            var chatSection = configuration.GetSection("Chat");
+            if (chatSection.Exists())
+            {
+                options.ChatDeploymentName = chatSection["ModelId"] ?? string.Empty;
+            }
+
+            configuration.GetSection(AzureOpenAiOptions.SectionName).Bind(options);
+        });
+
         services.AddScoped<S3StorageService>();
 
         services.AddScoped<IStorageProvider>(provider =>

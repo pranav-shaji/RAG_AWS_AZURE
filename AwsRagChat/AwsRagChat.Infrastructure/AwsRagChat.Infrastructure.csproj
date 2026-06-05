@@ -13,6 +13,7 @@
 		<PackageReference Include="AWSSDK.DynamoDBv2" Version="4.0.17.8" />
 		<PackageReference Include="AWSSDK.Extensions.NETCore.Setup" Version="4.0.3.33" />
 		<PackageReference Include="AWSSDK.S3" Version="4.0.21.1" />
+		<PackageReference Include="Azure.AI.OpenAI" Version="2.1.0" />
 		<PackageReference Include="Azure.Identity" Version="1.21.0" />
 		<PackageReference Include="Azure.Storage.Blobs" Version="12.29.0" />
 		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.26" />
