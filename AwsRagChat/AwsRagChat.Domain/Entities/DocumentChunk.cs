@@ -1,4 +1,4 @@
-﻿namespace AwsRagChat.Domain.Entities;
+namespace AwsRagChat.Domain.Entities;
 
 public sealed class DocumentChunk
 {
@@ -6,7 +6,14 @@ public sealed class DocumentChunk
     public string DocumentId { get; set; } = string.Empty;
     public string ChunkId { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
-    public string S3Key { get; set; } = string.Empty;
+    public string StorageKey { get; set; } = string.Empty;
+
+    [System.Obsolete("Use StorageKey instead.")]
+    public string S3Key
+    {
+        get => StorageKey;
+        set => StorageKey = value;
+    }
     public int PageNumber { get; set; }
     public string Section { get; set; } = string.Empty;
     public string Heading { get; set; } = string.Empty;

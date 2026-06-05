@@ -1,4 +1,4 @@
-﻿using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Domain.Entities;
@@ -40,7 +40,7 @@ public sealed class DynamoDbChunkRepository : IChunkRepository
                 ["DocumentId"] = new AttributeValue { S = chunk.DocumentId },
                 ["ChunkId"] = new AttributeValue { S = chunk.ChunkId },
                 ["FileName"] = new AttributeValue { S = chunk.FileName },
-                ["S3Key"] = new AttributeValue { S = chunk.S3Key },
+                ["S3Key"] = new AttributeValue { S = chunk.StorageKey },
                 ["PageNumber"] = new AttributeValue { N = chunk.PageNumber.ToString() },
                 ["Section"] = new AttributeValue { S = chunk.Section ?? string.Empty },
                 ["Heading"] = new AttributeValue { S = chunk.Heading ?? string.Empty },
@@ -354,7 +354,7 @@ public sealed class DynamoDbChunkRepository : IChunkRepository
             DocumentId = item.TryGetValue("DocumentId", out var documentId) ? documentId.S : string.Empty,
             ChunkId = item.TryGetValue("ChunkId", out var chunkId) ? chunkId.S : string.Empty,
             FileName = item.TryGetValue("FileName", out var fileName) ? fileName.S : string.Empty,
-            S3Key = item.TryGetValue("S3Key", out var s3Key) ? s3Key.S : string.Empty,
+            StorageKey = item.TryGetValue("S3Key", out var s3Key) ? s3Key.S : string.Empty,
             PageNumber = item.TryGetValue("PageNumber", out var pageNumber) && int.TryParse(pageNumber.N, out var parsedPage)
                 ? parsedPage
                 : 0,

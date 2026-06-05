@@ -1,4 +1,4 @@
-﻿using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 using AwsRagChat.Application.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -399,7 +399,7 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         string fileHash,
         long fileSizeBytes,
         bool isAdminDocument,
@@ -415,8 +415,8 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
         if (string.IsNullOrWhiteSpace(fileName))
             throw new ArgumentException("FileName is required.", nameof(fileName));
 
-        if (string.IsNullOrWhiteSpace(s3Key))
-            throw new ArgumentException("S3Key is required.", nameof(s3Key));
+        if (string.IsNullOrWhiteSpace(storageKey))
+            throw new ArgumentException("StorageKey is required.", nameof(storageKey));
 
         var now = DateTime.UtcNow.ToString("O");
 
@@ -425,7 +425,7 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
             ["DocumentId"] = new AttributeValue { S = documentId },
             ["OwnerUserId"] = new AttributeValue { S = ownerUserId },
             ["FileName"] = new AttributeValue { S = fileName },
-            ["S3Key"] = new AttributeValue { S = s3Key },
+            ["S3Key"] = new AttributeValue { S = storageKey },
             ["FileHash"] = new AttributeValue { S = fileHash },
             ["FileSizeBytes"] = new AttributeValue { N = fileSizeBytes.ToString(CultureInfo.InvariantCulture) },
             ["Status"] = new AttributeValue { S = "UPLOADED" },
@@ -607,7 +607,7 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
             DocumentId = GetString(item, "DocumentId"),
             OwnerUserId = GetString(item, "OwnerUserId"),
             FileName = GetString(item, "FileName"),
-            S3Key = GetString(item, "S3Key"),
+            StorageKey = GetString(item, "S3Key"),
             FileHash = GetString(item, "FileHash"),
             Status = GetString(item, "Status"),
 

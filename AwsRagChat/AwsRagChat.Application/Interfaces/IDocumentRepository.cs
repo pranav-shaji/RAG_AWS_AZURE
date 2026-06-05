@@ -1,11 +1,18 @@
-﻿namespace AwsRagChat.Application.Interfaces;
+namespace AwsRagChat.Application.Interfaces;
 
 public sealed class ExistingDocumentRecord
 {
     public string DocumentId { get; set; } = string.Empty;
     public string OwnerUserId { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
-    public string S3Key { get; set; } = string.Empty;
+    public string StorageKey { get; set; } = string.Empty;
+
+    [System.Obsolete("Use StorageKey instead.")]
+    public string S3Key
+    {
+        get => StorageKey;
+        set => StorageKey = value;
+    }
     public string FileHash { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
 
@@ -61,7 +68,7 @@ public interface IDocumentRepository
         string documentId,
         string ownerUserId,
         string fileName,
-        string s3Key,
+        string storageKey,
         string fileHash,
         long fileSizeBytes,
         bool isAdminDocument,
