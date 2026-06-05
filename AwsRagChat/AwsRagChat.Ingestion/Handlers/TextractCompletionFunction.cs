@@ -1,6 +1,7 @@
 using Amazon.Lambda.Core;
 using Amazon.Lambda.SQSEvents;
 using AwsRagChat.Application.Interfaces;
+using AwsRagChat.Application.Models;
 using AwsRagChat.Ingestion.Aws;
 using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Ingestion.Services;
@@ -11,8 +12,8 @@ namespace AwsRagChat.Ingestion.Handlers;
 
 public sealed class TextractCompletionFunction
 {
-    private readonly TextractAsyncExtractionService _textractAsyncExtractionService;
-    private readonly IIngestionPipeline<IngestionDocumentRequest, ExtractedDocument, IngestionPipelineResult> _documentIngestionPipeline;
+    private readonly IDocumentProcessor _documentProcessor;
+    private readonly IIngestionPipeline<IngestionDocumentRequest, AwsRagChat.Ingestion.Services.ExtractedDocument, IngestionPipelineResult> _documentIngestionPipeline;
     private readonly IDocumentStatusService _documentStatusService;
 
     private readonly IConfiguration _configuration;
@@ -26,7 +27,7 @@ public sealed class TextractCompletionFunction
 
         var services = AwsIngestionComposition.Create(_configuration);
 
-        _textractAsyncExtractionService = services.TextractAsyncExtractionService;
+        _documentProcessor = services.DocumentProcessor;
         _documentStatusService = services.DocumentStatusService;
         _documentIngestionPipeline = services.DocumentIngestionPipeline;
     }
@@ -133,8 +134,38 @@ public sealed class TextractCompletionFunction
 
                 context.Logger.LogLine($"Processing Textract result for {key}");
 
-                var extractedDocument = await _textractAsyncExtractionService
-                    .GetCompletedDocumentAsync(jobId, CancellationToken.None);
+                var processingResult = await _documentProcessor.GetCompletedOcrResultAsync(
+                    new CompletedOcrRequest
+                    {
+                        OcrJobId = jobId,
+                        BucketOrContainerName = bucket,
+                        ObjectKey = key,
+                        FileName = fileName
+                    },
+                    CancellationToken.None);
+
+                if (processingResult.Status == DocumentProcessingStatus.Failed)
+                {
+                    throw new InvalidOperationException(processingResult.Message ?? "OCR retrieval failed.");
+                }
+
+                if (processingResult.ExtractedDocument == null)
+                {
+                    throw new InvalidOperationException("No OCR extracted document content was returned.");
+                }
+
+                var extractedDocument = new AwsRagChat.Ingestion.Services.ExtractedDocument
+                {
+                    FullText = processingResult.ExtractedDocument.FullText,
+                    PageCount = processingResult.ExtractedDocument.PageCount,
+                    Pages = processingResult.ExtractedDocument.Pages
+                        .Select(p => new ExtractedPage
+                        {
+                            PageNumber = p.PageNumber,
+                            Text = p.Text
+                        })
+                        .ToList()
+                };
 
                 context.Logger.LogLine(
                     $"Textract extracted document. JobId: {jobId}, TextLength: {extractedDocument.FullText?.Length ?? 0}, PageCount: {extractedDocument.PageCount}");
