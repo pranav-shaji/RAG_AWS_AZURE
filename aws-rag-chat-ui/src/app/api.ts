@@ -7,7 +7,7 @@ export interface UploadResponse {
   documentId: string;
   existingDocumentId?: string | null;
   fileName: string;
-  s3Key: string;
+  storageKey: string;
   isDuplicate?: boolean;
   status?: string;
   message: string;
@@ -25,7 +25,7 @@ export interface DocumentMetadata {
   documentId: string;
   ownerUserId: string;
   fileName: string;
-  s3Key: string;
+  storageKey: string;
   fileHash: string;
   status: string;
   chunkCount: number;

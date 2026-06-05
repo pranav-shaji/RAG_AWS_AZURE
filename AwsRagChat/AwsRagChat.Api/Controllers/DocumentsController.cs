@@ -1,4 +1,4 @@
-﻿using AwsRagChat.Api.Security;
+using AwsRagChat.Api.Security;
 using AwsRagChat.Application.DTOs;
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Application.Models;
@@ -172,7 +172,7 @@ public sealed class DocumentsController : ControllerBase
                     DocumentId = existingDocument.DocumentId,
                     ExistingDocumentId = existingDocument.DocumentId,
                     FileName = existingDocument.FileName,
-                    S3Key = existingDocument.S3Key,
+                    StorageKey = existingDocument.StorageKey,
                     IsDuplicate = true,
                     Status = existingDocument.Status,
                     Message = "This file already exists. You can continue querying it."
@@ -204,7 +204,7 @@ public sealed class DocumentsController : ControllerBase
             {
                 DocumentId = documentId,
                 FileName = safeFileName,
-                S3Key = savedKey,
+                StorageKey = savedKey,
                 IsDuplicate = false,
                 Status = "UPLOADED",
                 Message = $"File uploaded successfully by user {userId}. Ingestion will happen asynchronously."

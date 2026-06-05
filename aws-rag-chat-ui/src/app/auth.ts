@@ -30,16 +30,16 @@ interface JwtPayload {
 export class Auth {
 
   private readonly clientId =
-    environment.cognitoClientId;
+    environment.authClientId;
 
   private readonly domain =
-    environment.cognitoDomain;
+    environment.authDomain;
 
   private readonly redirectUri =
     window.location.origin;
 
   private readonly scopes =
-    environment.cognitoScopes;
+    environment.authScopes;
 
   readonly isAuthenticated =
     signal<boolean>(false);
@@ -264,7 +264,7 @@ export class Auth {
         await response.text();
 
       throw new Error(
-        `Cognito token endpoint failed: ${text}`);
+        `Identity token endpoint failed: ${text}`);
     }
 
     return await response.json() as TokenResponse;
@@ -312,9 +312,9 @@ export class Auth {
         ? accessPayload.sub
         : '');
 
+    const roleClaim = environment.authRoleClaim || 'cognito:groups';
     this.applyGroups(
-      accessPayload['cognito:groups'] ??
-      idPayload['cognito:groups']);
+      (accessPayload[roleClaim] ?? idPayload[roleClaim]) as string[] | string);
 
     this.isAuthenticated.set(true);
   }
@@ -357,9 +357,9 @@ export class Auth {
         ? accessPayload.sub
         : '');
 
+    const roleClaim = environment.authRoleClaim || 'cognito:groups';
     this.applyGroups(
-      accessPayload['cognito:groups'] ??
-      idPayload['cognito:groups']);
+      (accessPayload[roleClaim] ?? idPayload[roleClaim]) as string[] | string);
 
     this.isAuthenticated.set(true);
   }

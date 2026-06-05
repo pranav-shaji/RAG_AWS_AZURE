@@ -145,7 +145,7 @@ public sealed class AdminController : ControllerBase
                 return NotFound("Document not found.");
 
             var url = await _storageService.CreateReadUrlAsync(
-                document.S3Key,
+                document.StorageKey,
                 TimeSpan.FromMinutes(10),
                 cancellationToken);
 
