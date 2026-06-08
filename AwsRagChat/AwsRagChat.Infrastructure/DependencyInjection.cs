@@ -8,6 +8,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using AwsRagChat.Infrastructure.Services;
 using Amazon.CognitoIdentityProvider;
+using Azure.Identity;
+using Microsoft.Azure.Cosmos;
+using Microsoft.Extensions.Options;
+
 
 namespace AwsRagChat.Infrastructure;
 
@@ -151,6 +155,42 @@ public static class DependencyInjection
         });
 
         services.AddScoped<AzureAiSearchVectorStore>();
+
+        services.Configure<CosmosDbOptions>(options =>
+        {
+            configuration.GetSection(CosmosDbOptions.SectionName).Bind(options);
+        });
+
+        services.AddSingleton<CosmosClient>(provider =>
+        {
+            var options = provider.GetRequiredService<IOptions<CosmosDbOptions>>().Value;
+            if (string.IsNullOrWhiteSpace(options.Endpoint))
+                throw new InvalidOperationException("Cosmos DB Endpoint is missing.");
+
+            var cosmosClientOptions = new CosmosClientOptions
+            {
+                SerializerOptions = new CosmosSerializationOptions
+                {
+                    PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase
+                }
+            };
+
+            if (!string.IsNullOrWhiteSpace(options.AuthKey))
+            {
+                return new CosmosClient(options.Endpoint, options.AuthKey, cosmosClientOptions);
+            }
+            else
+            {
+                return new CosmosClient(options.Endpoint, new DefaultAzureCredential(), cosmosClientOptions);
+            }
+        });
+
+        services.AddScoped<CosmosDbDocumentRepository>();
+        services.AddScoped<CosmosDbChunkRepository>();
+        services.AddScoped<CosmosDbConversationRepository>();
+        services.AddScoped<CosmosDbUserRepository>();
+        services.AddScoped<CosmosDbDocumentStatusService>();
+
 
 
         services.AddScoped<S3StorageService>();
