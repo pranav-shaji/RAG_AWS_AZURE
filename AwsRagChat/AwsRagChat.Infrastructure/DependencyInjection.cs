@@ -161,6 +161,11 @@ public static class DependencyInjection
             configuration.GetSection(CosmosDbOptions.SectionName).Bind(options);
         });
 
+        services.Configure<EntraIdOptions>(options =>
+        {
+            configuration.GetSection(EntraIdOptions.SectionName).Bind(options);
+        });
+
         services.AddSingleton<CosmosClient>(provider =>
         {
             var options = provider.GetRequiredService<IOptions<CosmosDbOptions>>().Value;
