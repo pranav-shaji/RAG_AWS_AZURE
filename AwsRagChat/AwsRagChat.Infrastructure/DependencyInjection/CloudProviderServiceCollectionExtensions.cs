@@ -1,4 +1,6 @@
+using System;
 using AwsRagChat.Infrastructure.Aws;
+using AwsRagChat.Infrastructure.Azure;
 using AwsRagChat.Infrastructure.Common;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,7 +20,12 @@ public static class CloudProviderServiceCollectionExtensions
             return services.AddAwsCognitoAuthentication(configuration);
         }
 
-        throw UnsupportedProvider(cloudProvider);
+        if (string.Equals(cloudProvider, CloudProviderNames.Azure, StringComparison.OrdinalIgnoreCase))
+        {
+            return services.AddEntraIdAuthentication(configuration);
+        }
+
+        throw new InvalidOperationException($"Unsupported CloudProvider: '{cloudProvider}'.");
     }
 
     public static IServiceCollection AddCloudProviderInfrastructure(
@@ -32,21 +39,33 @@ public static class CloudProviderServiceCollectionExtensions
             return services.AddAwsProviderInfrastructure(configuration);
         }
 
-        throw UnsupportedProvider(cloudProvider);
+        if (string.Equals(cloudProvider, CloudProviderNames.Azure, StringComparison.OrdinalIgnoreCase))
+        {
+            return services.AddAzureProviderInfrastructure(configuration);
+        }
+
+        throw new InvalidOperationException($"Unsupported CloudProvider: '{cloudProvider}'.");
     }
 
     private static string GetCloudProvider(IConfiguration configuration)
     {
         var cloudProvider = configuration["CloudProvider"];
 
-        return string.IsNullOrWhiteSpace(cloudProvider)
-            ? CloudProviderNames.Aws
-            : cloudProvider;
-    }
+        if (string.IsNullOrWhiteSpace(cloudProvider))
+        {
+            throw new InvalidOperationException("CloudProvider must be explicitly configured in settings. Valid values are 'AWS' or 'Azure'.");
+        }
 
-    private static InvalidOperationException UnsupportedProvider(string cloudProvider)
-    {
-        return new InvalidOperationException(
-            $"CloudProvider '{cloudProvider}' is not supported yet. Only 'AWS' is available in this build.");
+        if (string.Equals(cloudProvider, CloudProviderNames.Aws, StringComparison.OrdinalIgnoreCase))
+        {
+            return CloudProviderNames.Aws;
+        }
+
+        if (string.Equals(cloudProvider, CloudProviderNames.Azure, StringComparison.OrdinalIgnoreCase))
+        {
+            return CloudProviderNames.Azure;
+        }
+
+        throw new InvalidOperationException($"CloudProvider value '{cloudProvider}' is invalid. Explicitly configure CloudProvider to 'AWS' or 'Azure'.");
     }
 }

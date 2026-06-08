@@ -154,8 +154,6 @@ public static class DependencyInjection
             configuration.GetSection(AzureAiSearchOptions.SectionName).Bind(options);
         });
 
-        services.AddScoped<AzureAiSearchVectorStore>();
-
         services.Configure<CosmosDbOptions>(options =>
         {
             configuration.GetSection(CosmosDbOptions.SectionName).Bind(options);
@@ -166,90 +164,11 @@ public static class DependencyInjection
             configuration.GetSection(EntraIdOptions.SectionName).Bind(options);
         });
 
-        services.AddSingleton<CosmosClient>(provider =>
-        {
-            var options = provider.GetRequiredService<IOptions<CosmosDbOptions>>().Value;
-            if (string.IsNullOrWhiteSpace(options.Endpoint))
-                throw new InvalidOperationException("Cosmos DB Endpoint is missing.");
-
-            var cosmosClientOptions = new CosmosClientOptions
-            {
-                SerializerOptions = new CosmosSerializationOptions
-                {
-                    PropertyNamingPolicy = CosmosPropertyNamingPolicy.CamelCase
-                }
-            };
-
-            if (!string.IsNullOrWhiteSpace(options.AuthKey))
-            {
-                return new CosmosClient(options.Endpoint, options.AuthKey, cosmosClientOptions);
-            }
-            else
-            {
-                return new CosmosClient(options.Endpoint, new DefaultAzureCredential(), cosmosClientOptions);
-            }
-        });
-
-        services.AddScoped<CosmosDbDocumentRepository>();
-        services.AddScoped<CosmosDbChunkRepository>();
-        services.AddScoped<CosmosDbConversationRepository>();
-        services.AddScoped<CosmosDbUserRepository>();
-        services.AddScoped<CosmosDbDocumentStatusService>();
-
-
-
-        services.AddScoped<S3StorageService>();
-
-        services.AddScoped<IStorageProvider>(provider =>
-            provider.GetRequiredService<S3StorageService>());
-
-        services.AddScoped<IStorageService>(provider =>
-            provider.GetRequiredService<S3StorageService>());
-
-        services.AddAWSService<IAmazonCognitoIdentityProvider>();
-
-        services.AddScoped<IChunkRepository, DynamoDbChunkRepository>();
-
-        services.AddScoped<IDocumentRepository, DynamoDbDocumentRepository>();
-
-        services.AddScoped<IConversationRepository, DynamoDbConversationRepository>();
-
-        services.AddScoped<IUserRepository, DynamoDbUserRepository>();
-
-        services.AddScoped<BedrockEmbeddingService>();
-
-        services.AddScoped<IEmbeddingProvider>(provider =>
-            provider.GetRequiredService<BedrockEmbeddingService>());
-
-        services.AddScoped<IEmbeddingService>(provider =>
-            provider.GetRequiredService<BedrockEmbeddingService>());
-
-        services.AddScoped<BedrockChatCompletionService>();
-
-        services.AddScoped<IChatProvider>(provider =>
-            provider.GetRequiredService<BedrockChatCompletionService>());
-
-        services.AddScoped<IChatCompletionService>(provider =>
-            provider.GetRequiredService<BedrockChatCompletionService>());
-
-        services.AddScoped<OpenSearchService>();
-
-        services.AddScoped<IVectorStore>(provider =>
-            provider.GetRequiredService<OpenSearchService>());
-
-        services.AddScoped<IVectorSearchService>(provider =>
-            provider.GetRequiredService<OpenSearchService>());
-
+        // Register Core, Cloud-Agnostic Services
         services.AddScoped<RetrievalService>();
-
         services.AddScoped<ConversationService>();
-
         services.AddScoped<ChatService>();
-
-        services.AddScoped<IUserRoleService, CognitoUserRoleService>();
-
         services.AddScoped<IUserApprovalService, UserApprovalService>();
-
         services.AddScoped<IAdminAnalyticsService, AdminAnalyticsService>();
 
         return services;

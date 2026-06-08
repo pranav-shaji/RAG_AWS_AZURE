@@ -6,6 +6,12 @@ using Amazon.Extensions.NETCore.Setup;
 using Amazon.S3;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using AwsRagChat.Application.Interfaces;
+using AwsRagChat.Infrastructure.Storage;
+using AwsRagChat.Infrastructure.Persistence;
+using AwsRagChat.Infrastructure.AI;
+using AwsRagChat.Infrastructure.Services;
+using AwsRagChat.Infrastructure;
 
 namespace AwsRagChat.Infrastructure.Aws;
 
@@ -21,6 +27,7 @@ public static class AwsProviderServiceCollectionExtensions
             throw new InvalidOperationException("AWS:Region is required.");
         }
 
+        // 1. Register AWS SDK Clients
         services.AddDefaultAWSOptions(new AWSOptions
         {
             Region = RegionEndpoint.GetBySystemName(awsRegion)
@@ -31,6 +38,31 @@ public static class AwsProviderServiceCollectionExtensions
         services.AddAWSService<IAmazonBedrockRuntime>();
         services.AddAWSService<IAmazonCognitoIdentityProvider>();
 
+        // 2. Register AWS Service Implementations
+        services.AddScoped<S3StorageService>();
+        services.AddScoped<IStorageProvider>(provider => provider.GetRequiredService<S3StorageService>());
+        services.AddScoped<IStorageService>(provider => provider.GetRequiredService<S3StorageService>());
+
+        services.AddScoped<IChunkRepository, DynamoDbChunkRepository>();
+        services.AddScoped<IDocumentRepository, DynamoDbDocumentRepository>();
+        services.AddScoped<IConversationRepository, DynamoDbConversationRepository>();
+        services.AddScoped<IUserRepository, DynamoDbUserRepository>();
+
+        services.AddScoped<BedrockEmbeddingService>();
+        services.AddScoped<IEmbeddingProvider>(provider => provider.GetRequiredService<BedrockEmbeddingService>());
+        services.AddScoped<IEmbeddingService>(provider => provider.GetRequiredService<BedrockEmbeddingService>());
+
+        services.AddScoped<BedrockChatCompletionService>();
+        services.AddScoped<IChatProvider>(provider => provider.GetRequiredService<BedrockChatCompletionService>());
+        services.AddScoped<IChatCompletionService>(provider => provider.GetRequiredService<BedrockChatCompletionService>());
+
+        services.AddScoped<OpenSearchService>();
+        services.AddScoped<IVectorStore>(provider => provider.GetRequiredService<OpenSearchService>());
+        services.AddScoped<IVectorSearchService>(provider => provider.GetRequiredService<OpenSearchService>());
+
+        services.AddScoped<IUserRoleService, CognitoUserRoleService>();
+
+        // 3. Initialize common infrastructure (core app services and options bindings)
         services.AddInfrastructure(configuration);
 
         return services;
