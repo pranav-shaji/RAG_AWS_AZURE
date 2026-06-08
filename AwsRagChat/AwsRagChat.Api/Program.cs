@@ -4,8 +4,42 @@ using StackExchange.Redis;
 using AwsRagChat.Infrastructure.Cache;
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Infrastructure.CloudProviders;
+using Amazon.Extensions.Configuration.SystemsManager;
+using Azure.Identity;
 
 var builder = WebApplication.CreateBuilder(args);
+
+var cloudProvider = builder.Configuration["CloudProvider"];
+
+if (string.Equals(cloudProvider, "AWS", StringComparison.OrdinalIgnoreCase))
+{
+    var environment = builder.Environment.EnvironmentName.ToLowerInvariant();
+    builder.Configuration.AddSystemsManager(source =>
+    {
+        source.Path = $"/rag-chat/{environment}";
+        source.Optional = true;
+        source.ReloadAfter = TimeSpan.FromMinutes(5);
+    });
+}
+else if (string.Equals(cloudProvider, "Azure", StringComparison.OrdinalIgnoreCase))
+{
+    var vaultUriStr = builder.Configuration["AZURE_KEY_VAULT_URI"];
+    if (!string.IsNullOrWhiteSpace(vaultUriStr))
+    {
+        if (Uri.TryCreate(vaultUriStr, UriKind.Absolute, out var vaultUri))
+        {
+            builder.Configuration.AddAzureKeyVault(vaultUri, new DefaultAzureCredential());
+        }
+        else
+        {
+            Console.WriteLine($"WARNING: AZURE_KEY_VAULT_URI is not a valid absolute URI: {vaultUriStr}");
+        }
+    }
+    else
+    {
+        Console.WriteLine("WARNING: CloudProvider is Azure but AZURE_KEY_VAULT_URI is not configured. Key Vault config provider was not added.");
+    }
+}
 
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();

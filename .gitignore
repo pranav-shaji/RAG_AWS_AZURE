@@ -16,5 +16,8 @@ aws-rag-chat-ui/.angular/
 .env
 .env.*
 appsettings.Development.json
+appsettings.Production.json
+appsettings.*.json
+local.settings.json
 *.user
 *.suo

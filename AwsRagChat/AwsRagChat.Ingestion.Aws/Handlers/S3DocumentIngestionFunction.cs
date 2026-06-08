@@ -17,10 +17,7 @@ public sealed class S3DocumentIngestionFunction
 
     public S3DocumentIngestionFunction()
     {
-        var configuration = new ConfigurationBuilder()
-            .SetBasePath(Directory.GetCurrentDirectory())
-            .AddJsonFile("appsettings.json", optional: false)
-            .Build();
+        var configuration = AwsIngestionConfiguration.Build();
 
         var services = AwsIngestionComposition.Create(configuration);
 

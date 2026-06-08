@@ -20,10 +20,7 @@ public sealed class TextractCompletionFunction
 
     public TextractCompletionFunction()
     {
-        _configuration = new ConfigurationBuilder()
-            .SetBasePath(Directory.GetCurrentDirectory())
-            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
-            .Build();
+        _configuration = AwsIngestionConfiguration.Build();
 
         var services = AwsIngestionComposition.Create(_configuration);
 
