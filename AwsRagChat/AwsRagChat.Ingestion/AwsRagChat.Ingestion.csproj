@@ -18,6 +18,7 @@
 		<PackageReference Include="AWSSDK.Extensions.NETCore.Setup" Version="4.0.3.33" />
 		<PackageReference Include="AWSSDK.S3" Version="4.0.21.1" />
 		<PackageReference Include="AWSSDK.Textract" Version="4.0.3.24" />
+		<PackageReference Include="Azure.AI.DocumentIntelligence" Version="1.0.0" />
 		<PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.6" />
 		<PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.6" />
 		<PackageReference Include="Microsoft.Extensions.Options" Version="10.0.6" />
