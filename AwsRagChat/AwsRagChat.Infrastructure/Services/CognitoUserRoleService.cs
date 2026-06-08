@@ -4,6 +4,8 @@ using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Application.Models;
 using AwsRagChat.Infrastructure.Options;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Services;
 
@@ -11,25 +13,30 @@ public sealed class CognitoUserRoleService : IUserRoleService
 {
     private readonly IAmazonCognitoIdentityProvider _cognito;
     private readonly CognitoOptions _options;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public CognitoUserRoleService(
         IAmazonCognitoIdentityProvider cognito,
-        IOptions<CognitoOptions> options)
+        IOptions<CognitoOptions> options,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _cognito = cognito;
         _options = options.Value;
+        _resiliencePipeline = pipelineProvider.GetPipeline("CognitoPipeline");
     }
 
     public async Task<string?> GetUserRoleAsync(
         string userId,
         CancellationToken cancellationToken = default)
     {
-        var response = await _cognito.AdminListGroupsForUserAsync(
-            new AdminListGroupsForUserRequest
-            {
-                UserPoolId = _options.UserPoolId,
-                Username = userId
-            },
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _cognito.AdminListGroupsForUserAsync(
+                new AdminListGroupsForUserRequest
+                {
+                    UserPoolId = _options.UserPoolId,
+                    Username = userId
+                },
+                token),
             cancellationToken);
 
         return response.Groups
@@ -54,13 +61,15 @@ public sealed class CognitoUserRoleService : IUserRoleService
         if (!string.IsNullOrWhiteSpace(existingRole))
             throw new InvalidOperationException("User role already assigned.");
 
-        await _cognito.AdminAddUserToGroupAsync(
-            new AdminAddUserToGroupRequest
-            {
-                UserPoolId = _options.UserPoolId,
-                Username = userId,
-                GroupName = role
-            },
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _cognito.AdminAddUserToGroupAsync(
+                new AdminAddUserToGroupRequest
+                {
+                    UserPoolId = _options.UserPoolId,
+                    Username = userId,
+                    GroupName = role
+                },
+                token),
             cancellationToken);
     }
 
@@ -74,12 +83,14 @@ public sealed class CognitoUserRoleService : IUserRoleService
 
         role = EnterpriseRoles.Normalize(role);
 
-        var response = await _cognito.AdminListGroupsForUserAsync(
-            new AdminListGroupsForUserRequest
-            {
-                UserPoolId = _options.UserPoolId,
-                Username = userId
-            },
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _cognito.AdminListGroupsForUserAsync(
+                new AdminListGroupsForUserRequest
+                {
+                    UserPoolId = _options.UserPoolId,
+                    Username = userId
+                },
+                token),
             cancellationToken);
 
         foreach (var group in response.Groups
@@ -87,48 +98,54 @@ public sealed class CognitoUserRoleService : IUserRoleService
                      .Where(groupName => EnterpriseRoles.IsValid(groupName) &&
                                          !string.Equals(groupName, role, StringComparison.OrdinalIgnoreCase)))
         {
-            await _cognito.AdminRemoveUserFromGroupAsync(
-                new AdminRemoveUserFromGroupRequest
-                {
-                    UserPoolId = _options.UserPoolId,
-                    Username = userId,
-                    GroupName = group
-                },
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _cognito.AdminRemoveUserFromGroupAsync(
+                    new AdminRemoveUserFromGroupRequest
+                    {
+                        UserPoolId = _options.UserPoolId,
+                        Username = userId,
+                        GroupName = group
+                    },
+                    token),
                 cancellationToken);
         }
 
         if (!response.Groups.Any(group =>
                 string.Equals(group.GroupName, role, StringComparison.OrdinalIgnoreCase)))
         {
-            await _cognito.AdminAddUserToGroupAsync(
-                new AdminAddUserToGroupRequest
-                {
-                    UserPoolId = _options.UserPoolId,
-                    Username = userId,
-                    GroupName = role
-                },
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _cognito.AdminAddUserToGroupAsync(
+                    new AdminAddUserToGroupRequest
+                    {
+                        UserPoolId = _options.UserPoolId,
+                        Username = userId,
+                        GroupName = role
+                    },
+                    token),
                 cancellationToken);
         }
 
-        await _cognito.AdminUpdateUserAttributesAsync(
-            new AdminUpdateUserAttributesRequest
-            {
-                UserPoolId = _options.UserPoolId,
-                Username = userId,
-                UserAttributes =
-                [
-                    new AttributeType
-                    {
-                        Name = "custom:approvalStatus",
-                        Value = ApprovalStatuses.Approved
-                    },
-                    new AttributeType
-                    {
-                        Name = "custom:approvedRole",
-                        Value = role
-                    }
-                ]
-            },
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _cognito.AdminUpdateUserAttributesAsync(
+                new AdminUpdateUserAttributesRequest
+                {
+                    UserPoolId = _options.UserPoolId,
+                    Username = userId,
+                    UserAttributes =
+                    [
+                        new AttributeType
+                        {
+                            Name = "custom:approvalStatus",
+                            Value = ApprovalStatuses.Approved
+                        },
+                        new AttributeType
+                        {
+                            Name = "custom:approvedRole",
+                            Value = role
+                        }
+                    ]
+                },
+                token),
             cancellationToken);
     }
 
@@ -141,13 +158,15 @@ public sealed class CognitoUserRoleService : IUserRoleService
 
         try
         {
-            var bySub = await _cognito.ListUsersAsync(
-                new ListUsersRequest
-                {
-                    UserPoolId = _options.UserPoolId,
-                    Filter = $"sub = \"{userId}\"",
-                    Limit = 1
-                },
+            var bySub = await _resiliencePipeline.ExecuteAsync(
+                async token => await _cognito.ListUsersAsync(
+                    new ListUsersRequest
+                    {
+                        UserPoolId = _options.UserPoolId,
+                        Filter = $"sub = \"{userId}\"",
+                        Limit = 1
+                    },
+                    token),
                 cancellationToken);
 
             var email = bySub.Users
@@ -165,12 +184,14 @@ public sealed class CognitoUserRoleService : IUserRoleService
 
         try
         {
-            var response = await _cognito.AdminGetUserAsync(
-                new AdminGetUserRequest
-                {
-                    UserPoolId = _options.UserPoolId,
-                    Username = userId
-                },
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _cognito.AdminGetUserAsync(
+                    new AdminGetUserRequest
+                    {
+                        UserPoolId = _options.UserPoolId,
+                        Username = userId
+                    },
+                    token),
                 cancellationToken);
 
             return response.UserAttributes

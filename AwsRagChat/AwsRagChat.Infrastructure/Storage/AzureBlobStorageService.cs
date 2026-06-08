@@ -8,24 +8,34 @@ using AwsRagChat.Application.Models;
 using AwsRagChat.Infrastructure.Options;
 using Microsoft.Extensions.Options;
 
+using Polly;
+using Polly.Registry;
+
 namespace AwsRagChat.Infrastructure.Storage;
 
 public sealed class AzureBlobStorageService : IStorageProvider
 {
     private readonly BlobServiceClient _blobServiceClient;
     private readonly AzureStorageOptions _options;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
-    public AzureBlobStorageService(IOptions<AzureStorageOptions> options)
+    public AzureBlobStorageService(
+        IOptions<AzureStorageOptions> options,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _options = options.Value;
+        _resiliencePipeline = pipelineProvider.GetPipeline("BlobStoragePipeline");
+
+        var clientOptions = new BlobClientOptions();
+        clientOptions.Retry.MaxRetries = 0; // Disable SDK native retry so Polly handles it
 
         if (!string.IsNullOrWhiteSpace(_options.ConnectionString))
         {
-            _blobServiceClient = new BlobServiceClient(_options.ConnectionString);
+            _blobServiceClient = new BlobServiceClient(_options.ConnectionString, clientOptions);
         }
         else if (!string.IsNullOrWhiteSpace(_options.AccountUrl))
         {
-            _blobServiceClient = new BlobServiceClient(new Uri(_options.AccountUrl), new DefaultAzureCredential());
+            _blobServiceClient = new BlobServiceClient(new Uri(_options.AccountUrl), new DefaultAzureCredential(), clientOptions);
         }
         else
         {
@@ -46,10 +56,14 @@ public sealed class AzureBlobStorageService : IStorageProvider
             throw new InvalidOperationException("Azure Storage container name is not configured.");
 
         var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-        await containerClient.CreateIfNotExistsAsync(cancellationToken: cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await containerClient.CreateIfNotExistsAsync(cancellationToken: token),
+            cancellationToken);
 
         var blobClient = containerClient.GetBlobClient(key);
-        await blobClient.UploadAsync(stream, overwrite: true, cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await blobClient.UploadAsync(stream, overwrite: true, cancellationToken: token),
+            cancellationToken);
 
         return key;
     }
@@ -86,9 +100,11 @@ public sealed class AzureBlobStorageService : IStorageProvider
 
         try
         {
-            var userDelegationKey = await _blobServiceClient.GetUserDelegationKeyAsync(
-                DateTimeOffset.UtcNow,
-                DateTimeOffset.UtcNow.Add(expiresIn),
+            var userDelegationKey = await _resiliencePipeline.ExecuteAsync(
+                async token => await _blobServiceClient.GetUserDelegationKeyAsync(
+                    DateTimeOffset.UtcNow,
+                    DateTimeOffset.UtcNow.Add(expiresIn),
+                    cancellationToken: token),
                 cancellationToken);
 
             var sasBuilder = new BlobSasBuilder
@@ -133,7 +149,9 @@ public sealed class AzureBlobStorageService : IStorageProvider
         var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
         var blobClient = containerClient.GetBlobClient(request.ObjectKey);
 
-        var response = await blobClient.DownloadStreamingAsync(cancellationToken: cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await blobClient.DownloadStreamingAsync(cancellationToken: token),
+            cancellationToken);
 
         return new StorageObjectReadResult
         {

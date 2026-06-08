@@ -1,27 +1,44 @@
 using Microsoft.Extensions.Caching.Distributed;
 using System.Text.Json;
 using AwsRagChat.Application.Interfaces;
+using Polly;
+using Polly.Registry;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace AwsRagChat.Infrastructure.Cache;
 
 public class RedisCacheService : IRedisCacheService
 {
     private readonly IDistributedCache _cache;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
-    public RedisCacheService(IDistributedCache cache)
+    public RedisCacheService(
+        IDistributedCache cache,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _cache = cache;
+        _resiliencePipeline = pipelineProvider.GetPipeline("RedisPipeline");
     }
 
     public async Task<T?> GetAsync<T>(string key)
     {
-        var cached =
-            await _cache.GetStringAsync(key);
+        try
+        {
+            var cached = await _resiliencePipeline.ExecuteAsync(
+                async token => await _cache.GetStringAsync(key, token));
 
-        if (string.IsNullOrWhiteSpace(cached))
+            if (string.IsNullOrWhiteSpace(cached))
+                return default;
+
+            return JsonSerializer.Deserialize<T>(cached);
+        }
+        catch (Exception)
+        {
+            // Bypassing Redis cache on connection/timeout error
             return default;
-
-        return JsonSerializer.Deserialize<T>(cached);
+        }
     }
 
     public async Task SetAsync<T>(
@@ -29,20 +46,36 @@ public class RedisCacheService : IRedisCacheService
         T value,
         TimeSpan expiration)
     {
-        var json =
-            JsonSerializer.Serialize(value);
+        try
+        {
+            var json = JsonSerializer.Serialize(value);
 
-        await _cache.SetStringAsync(
-            key,
-            json,
-            new DistributedCacheEntryOptions
-            {
-                AbsoluteExpirationRelativeToNow = expiration
-            });
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _cache.SetStringAsync(
+                    key,
+                    json,
+                    new DistributedCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = expiration
+                    },
+                    token));
+        }
+        catch (Exception)
+        {
+            // Ignore/bypass Redis cache write errors
+        }
     }
 
     public async Task RemoveAsync(string key)
     {
-        await _cache.RemoveAsync(key);
+        try
+        {
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _cache.RemoveAsync(key, token));
+        }
+        catch (Exception)
+        {
+            // Ignore/bypass Redis cache removal errors
+        }
     }
 }

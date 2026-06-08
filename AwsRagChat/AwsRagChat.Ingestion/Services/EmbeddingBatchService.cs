@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using Amazon.BedrockRuntime;
 using Amazon.BedrockRuntime.Model;
@@ -6,6 +6,8 @@ using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Domain.Entities;
 using AwsRagChat.Ingestion.Options;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Ingestion.Services;
 
@@ -13,13 +15,16 @@ public sealed class EmbeddingBatchService : IEmbeddingProvider
 {
     private readonly IAmazonBedrockRuntime _bedrockRuntime;
     private readonly BedrockOptions _bedrockOptions;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public EmbeddingBatchService(
         IAmazonBedrockRuntime bedrockRuntime,
-        IOptions<BedrockOptions> bedrockOptions)
+        IOptions<BedrockOptions> bedrockOptions,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _bedrockRuntime = bedrockRuntime;
         _bedrockOptions = bedrockOptions.Value;
+        _resiliencePipeline = pipelineProvider.GetPipeline("BedrockEmbedPipeline");
     }
 
     public async Task AddEmbeddingsAsync(
@@ -54,7 +59,9 @@ public sealed class EmbeddingBatchService : IEmbeddingProvider
             Body = new MemoryStream(Encoding.UTF8.GetBytes(json))
         };
 
-        var response = await _bedrockRuntime.InvokeModelAsync(request, cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _bedrockRuntime.InvokeModelAsync(request, token),
+            cancellationToken);
 
         using var reader = new StreamReader(response.Body);
         var responseJson = await reader.ReadToEndAsync(cancellationToken);

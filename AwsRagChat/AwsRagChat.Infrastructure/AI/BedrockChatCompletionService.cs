@@ -9,6 +9,8 @@ using AwsRagChat.Domain.Entities;
 using AwsRagChat.Infrastructure.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.AI;
 
@@ -17,15 +19,18 @@ public sealed class BedrockChatCompletionService : IChatProvider
     private readonly IAmazonBedrockRuntime _bedrockRuntime;
     private readonly BedrockOptions _bedrockOptions;
     private readonly ILogger<BedrockChatCompletionService> _logger;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public BedrockChatCompletionService(
         IAmazonBedrockRuntime bedrockRuntime,
         IOptions<BedrockOptions> bedrockOptions,
-        ILogger<BedrockChatCompletionService> logger)
+        ILogger<BedrockChatCompletionService> logger,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _bedrockRuntime = bedrockRuntime;
         _bedrockOptions = bedrockOptions.Value;
         _logger = logger;
+        _resiliencePipeline = pipelineProvider.GetPipeline("BedrockChatPipeline");
     }
 
     public async Task<string> GenerateAnswerAsync(
@@ -164,7 +169,9 @@ public sealed class BedrockChatCompletionService : IChatProvider
         };
 
         var stopwatch = Stopwatch.StartNew();
-        var response = await _bedrockRuntime.InvokeModelAsync(request, cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _bedrockRuntime.InvokeModelAsync(request, token),
+            cancellationToken);
         stopwatch.Stop();
 
         _logger.LogInformation(

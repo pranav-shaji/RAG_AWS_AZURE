@@ -3,6 +3,8 @@ using Amazon.DynamoDBv2.Model;
 using AwsRagChat.Application.DTOs;
 using AwsRagChat.Application.Interfaces;
 using Microsoft.Extensions.Configuration;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Persistence;
 
@@ -12,13 +14,16 @@ public sealed class DynamoDbUserRepository : IUserRepository
 
     private readonly IAmazonDynamoDB _dynamoDb;
     private readonly string _tableName;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public DynamoDbUserRepository(
         IAmazonDynamoDB dynamoDb,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _dynamoDb = dynamoDb;
         _tableName = configuration["Users:TableName"] ?? DefaultTableName;
+        _resiliencePipeline = pipelineProvider.GetPipeline("DynamoDbPipeline");
     }
 
     public async Task<EnterpriseUserDto?> GetByUserIdAsync(
@@ -28,15 +33,17 @@ public sealed class DynamoDbUserRepository : IUserRepository
         if (string.IsNullOrWhiteSpace(userId))
             throw new ArgumentException("UserId is required.", nameof(userId));
 
-        var response = await _dynamoDb.GetItemAsync(
-            new GetItemRequest
-            {
-                TableName = _tableName,
-                Key = new Dictionary<string, AttributeValue>
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _dynamoDb.GetItemAsync(
+                new GetItemRequest
                 {
-                    ["UserId"] = new AttributeValue { S = userId }
-                }
-            },
+                    TableName = _tableName,
+                    Key = new Dictionary<string, AttributeValue>
+                    {
+                        ["UserId"] = new AttributeValue { S = userId }
+                    }
+                },
+                token),
             cancellationToken);
 
         return response.Item is { Count: > 0 }
@@ -57,8 +64,8 @@ public sealed class DynamoDbUserRepository : IUserRepository
 
         do
         {
-            response = await _dynamoDb.ScanAsync(
-                request,
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _dynamoDb.ScanAsync(request, token),
                 cancellationToken);
 
             users.AddRange(response.Items.Select(Map));
@@ -102,12 +109,14 @@ public sealed class DynamoDbUserRepository : IUserRepository
         if (user.ApprovedAtUtc.HasValue)
             item["ApprovedAtUtc"] = new AttributeValue { S = user.ApprovedAtUtc.Value.ToString("O") };
 
-        await _dynamoDb.PutItemAsync(
-            new PutItemRequest
-            {
-                TableName = _tableName,
-                Item = item
-            },
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _dynamoDb.PutItemAsync(
+                new PutItemRequest
+                {
+                    TableName = _tableName,
+                    Item = item
+                },
+                token),
             cancellationToken);
     }
 

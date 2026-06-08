@@ -9,23 +9,31 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Persistence;
 
 public sealed class CosmosDbDocumentRepository : IDocumentRepository
 {
+    private const string DefaultTableName = "rag-documents";
+    private const string OwnerFileHashIndexName = "OwnerUserId-FileHash-index";
+
     private readonly CosmosClient _cosmosClient;
     private readonly CosmosDbOptions _options;
+    private readonly ResiliencePipeline _resiliencePipeline;
     private Container _container = null!;
     private static readonly SemaphoreSlim _initializeSemaphore = new(1, 1);
     private static bool _isInitialized;
 
     public CosmosDbDocumentRepository(
         CosmosClient cosmosClient,
-        IOptions<CosmosDbOptions> options)
+        IOptions<CosmosDbOptions> options,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _cosmosClient = cosmosClient;
         _options = options.Value;
+        _resiliencePipeline = pipelineProvider.GetPipeline("CosmosDbPipeline");
     }
 
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
@@ -39,10 +47,14 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
             if (_isInitialized && _container != null)
                 return;
 
-            var dbResponse = await _cosmosClient.CreateDatabaseIfNotExistsAsync(_options.DatabaseName, cancellationToken: cancellationToken);
-            var containerResponse = await dbResponse.Database.CreateContainerIfNotExistsAsync(
-                new ContainerProperties(_options.DocumentsContainer, "/id"),
-                cancellationToken: cancellationToken);
+            var dbResponse = await _resiliencePipeline.ExecuteAsync(
+                async token => await _cosmosClient.CreateDatabaseIfNotExistsAsync(_options.DatabaseName, cancellationToken: token),
+                cancellationToken);
+            var containerResponse = await _resiliencePipeline.ExecuteAsync(
+                async token => await dbResponse.Database.CreateContainerIfNotExistsAsync(
+                    new ContainerProperties(_options.DocumentsContainer, "/id"),
+                    cancellationToken: token),
+                cancellationToken);
 
             _container = containerResponse.Container;
             _isInitialized = true;
@@ -74,7 +86,9 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
 
         if (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             var item = response.FirstOrDefault();
             if (item != null)
             {
@@ -96,10 +110,12 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
 
         try
         {
-            var response = await _container.ReadItemAsync<CosmosDocumentModel>(
-                documentId,
-                new PartitionKey(documentId),
-                cancellationToken: cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.ReadItemAsync<CosmosDocumentModel>(
+                    documentId,
+                    new PartitionKey(documentId),
+                    cancellationToken: token),
+                cancellationToken);
 
             return Map(response.Resource);
         }
@@ -139,7 +155,9 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
             AllowedRoles = allowedRoles.ToList()
         };
 
-        await _container.UpsertItemAsync(model, new PartitionKey(documentId), cancellationToken: cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _container.UpsertItemAsync(model, new PartitionKey(documentId), cancellationToken: token),
+            cancellationToken);
     }
 
     public async Task<int> GetDocumentCountAsync(
@@ -168,7 +186,9 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
 
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             results.AddRange(response.Select(Map));
         }
 
@@ -188,11 +208,13 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
             PatchOperation.Set("/updatedAtUtc", DateTime.UtcNow)
         };
 
-        await _container.PatchItemAsync<CosmosDocumentModel>(
-            documentId,
-            new PartitionKey(documentId),
-            patchOperations,
-            cancellationToken: cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _container.PatchItemAsync<CosmosDocumentModel>(
+                documentId,
+                new PartitionKey(documentId),
+                patchOperations,
+                cancellationToken: token),
+            cancellationToken);
     }
 
     public async Task MarkIndexedAsync(
@@ -211,11 +233,13 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
             PatchOperation.Set("/updatedAtUtc", DateTime.UtcNow)
         };
 
-        await _container.PatchItemAsync<CosmosDocumentModel>(
-            documentId,
-            new PartitionKey(documentId),
-            patchOperations,
-            cancellationToken: cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _container.PatchItemAsync<CosmosDocumentModel>(
+                documentId,
+                new PartitionKey(documentId),
+                patchOperations,
+                cancellationToken: token),
+            cancellationToken);
     }
 
     public async Task MarkFailedAsync(
@@ -230,11 +254,13 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
             PatchOperation.Set("/updatedAtUtc", DateTime.UtcNow)
         };
 
-        await _container.PatchItemAsync<CosmosDocumentModel>(
-            documentId,
-            new PartitionKey(documentId),
-            patchOperations,
-            cancellationToken: cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _container.PatchItemAsync<CosmosDocumentModel>(
+                documentId,
+                new PartitionKey(documentId),
+                patchOperations,
+                cancellationToken: token),
+            cancellationToken);
     }
 
     public async Task<List<ExistingDocumentRecord>> GetRecentDocumentsAsync(
@@ -251,7 +277,9 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
 
         if (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             results.AddRange(response.Select(Map));
         }
 
@@ -273,7 +301,9 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
 
         if (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             return new PagedResult<ExistingDocumentRecord>
             {
                 Items = response.Select(Map).ToList(),
@@ -357,7 +387,9 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
         var iterator = _container.GetItemQueryIterator<T?>(queryDefinition);
         if (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             var val = response.FirstOrDefault();
             return val ?? default!;
         }

@@ -11,6 +11,8 @@ using Microsoft.Extensions.Options;
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Application.Models;
 using AwsRagChat.Infrastructure.Options;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Services;
 
@@ -18,10 +20,14 @@ public sealed class EntraUserRoleService : IUserRoleService
 {
     private readonly GraphServiceClient _graphClient;
     private readonly EntraIdOptions _options;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
-    public EntraUserRoleService(IOptions<EntraIdOptions> options)
+    public EntraUserRoleService(
+        IOptions<EntraIdOptions> options,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _options = options.Value;
+        _resiliencePipeline = pipelineProvider.GetPipeline("GraphPipeline");
 
         if (string.IsNullOrWhiteSpace(_options.TenantId) || string.IsNullOrWhiteSpace(_options.ClientId))
         {
@@ -52,8 +58,10 @@ public sealed class EntraUserRoleService : IUserRoleService
         }
 
         // It is a UPN/email, look it up to resolve the unique GUID Object ID
-        var user = await _graphClient.Users[userId].GetAsync(
-            requestConfig => requestConfig.QueryParameters.Select = new[] { "id" },
+        var user = await _resiliencePipeline.ExecuteAsync(
+            async token => await _graphClient.Users[userId].GetAsync(
+                requestConfig => requestConfig.QueryParameters.Select = new[] { "id" },
+                token),
             cancellationToken);
 
         if (user == null || string.IsNullOrWhiteSpace(user.Id))
@@ -74,7 +82,9 @@ public sealed class EntraUserRoleService : IUserRoleService
         try
         {
             var resolvedId = await ResolveObjectIdAsync(userId, cancellationToken);
-            var memberOf = await _graphClient.Users[resolvedId].MemberOf.GetAsync(cancellationToken: cancellationToken);
+            var memberOf = await _resiliencePipeline.ExecuteAsync(
+                async token => await _graphClient.Users[resolvedId].MemberOf.GetAsync(cancellationToken: token),
+                cancellationToken);
 
             if (memberOf?.Value == null)
                 return null;
@@ -130,7 +140,9 @@ public sealed class EntraUserRoleService : IUserRoleService
             OdataId = $"https://graph.microsoft.com/v1.0/directoryObjects/{resolvedId}"
         };
 
-        await _graphClient.Groups[groupId].Members.Ref.PostAsync(requestBody, cancellationToken: cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _graphClient.Groups[groupId].Members.Ref.PostAsync(requestBody, cancellationToken: token),
+            cancellationToken);
     }
 
     public async Task SetRoleAsync(
@@ -151,7 +163,9 @@ public sealed class EntraUserRoleService : IUserRoleService
         var resolvedId = await ResolveObjectIdAsync(userId, cancellationToken);
 
         // Fetch current group memberships
-        var memberOf = await _graphClient.Users[resolvedId].MemberOf.GetAsync(cancellationToken: cancellationToken);
+        var memberOf = await _resiliencePipeline.ExecuteAsync(
+            async token => await _graphClient.Users[resolvedId].MemberOf.GetAsync(cancellationToken: token),
+            cancellationToken);
         var currentGroupIds = memberOf?.Value?.Select(x => x.Id).Where(id => id != null).Select(id => id!).ToList() ?? new List<string>();
 
         // Remove user from other mapped groups
@@ -165,7 +179,9 @@ public sealed class EntraUserRoleService : IUserRoleService
             {
                 try
                 {
-                    await _graphClient.Groups[configuredGroupId].Members[resolvedId].Ref.DeleteAsync(cancellationToken: cancellationToken);
+                    await _resiliencePipeline.ExecuteAsync(
+                        async token => await _graphClient.Groups[configuredGroupId].Members[resolvedId].Ref.DeleteAsync(cancellationToken: token),
+                        cancellationToken);
                 }
                 catch (Exception)
                 {
@@ -182,7 +198,9 @@ public sealed class EntraUserRoleService : IUserRoleService
                 OdataId = $"https://graph.microsoft.com/v1.0/directoryObjects/{resolvedId}"
             };
 
-            await _graphClient.Groups[targetGroupId].Members.Ref.PostAsync(requestBody, cancellationToken: cancellationToken);
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _graphClient.Groups[targetGroupId].Members.Ref.PostAsync(requestBody, cancellationToken: token),
+                cancellationToken);
         }
     }
 
@@ -200,8 +218,10 @@ public sealed class EntraUserRoleService : IUserRoleService
 
         try
         {
-            var user = await _graphClient.Users[userId].GetAsync(
-                requestConfig => requestConfig.QueryParameters.Select = new[] { "mail", "userPrincipalName" },
+            var user = await _resiliencePipeline.ExecuteAsync(
+                async token => await _graphClient.Users[userId].GetAsync(
+                    requestConfig => requestConfig.QueryParameters.Select = new[] { "mail", "userPrincipalName" },
+                    token),
                 cancellationToken);
 
             return user?.Mail ?? user?.UserPrincipalName;

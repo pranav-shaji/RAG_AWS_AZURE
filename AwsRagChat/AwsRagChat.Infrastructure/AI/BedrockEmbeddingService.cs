@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using Amazon.BedrockRuntime;
 using Amazon.BedrockRuntime.Model;
@@ -7,6 +7,8 @@ using AwsRagChat.Infrastructure.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.AI;
 
@@ -15,15 +17,18 @@ public sealed class BedrockEmbeddingService : IEmbeddingProvider
     private readonly IAmazonBedrockRuntime _bedrockRuntime;
     private readonly BedrockOptions _bedrockOptions;
     private readonly ILogger<BedrockEmbeddingService> _logger;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public BedrockEmbeddingService(
         IAmazonBedrockRuntime bedrockRuntime,
         IOptions<BedrockOptions> bedrockOptions,
-        ILogger<BedrockEmbeddingService> logger)
+        ILogger<BedrockEmbeddingService> logger,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _bedrockRuntime = bedrockRuntime;
         _bedrockOptions = bedrockOptions.Value;
         _logger = logger;
+        _resiliencePipeline = pipelineProvider.GetPipeline("BedrockEmbedPipeline");
     }
 
     public async Task<List<float>> GenerateEmbeddingAsync(
@@ -49,7 +54,9 @@ public sealed class BedrockEmbeddingService : IEmbeddingProvider
         };
 
         var stopwatch = Stopwatch.StartNew();
-        var response = await _bedrockRuntime.InvokeModelAsync(request, cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _bedrockRuntime.InvokeModelAsync(request, token),
+            cancellationToken);
         stopwatch.Stop();
 
         _logger.LogInformation(

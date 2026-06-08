@@ -16,6 +16,8 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Services;
 
@@ -25,15 +27,18 @@ public sealed class AzureAiSearchVectorStore : IVectorStore
     private readonly SearchIndexClient _indexClient;
     private readonly AzureAiSearchOptions _options;
     private readonly ILogger<AzureAiSearchVectorStore> _logger;
+    private readonly ResiliencePipeline _resiliencePipeline;
     private static readonly SemaphoreSlim _initializeSemaphore = new(1, 1);
     private static bool _isInitialized;
 
     public AzureAiSearchVectorStore(
         IOptions<AzureAiSearchOptions> options,
-        ILogger<AzureAiSearchVectorStore> logger)
+        ILogger<AzureAiSearchVectorStore> logger,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _options = options.Value;
         _logger = logger;
+        _resiliencePipeline = pipelineProvider.GetPipeline("AzureAiSearchPipeline");
 
         if (string.IsNullOrWhiteSpace(_options.Endpoint))
             throw new InvalidOperationException("Azure AI Search Endpoint is missing.");
@@ -41,15 +46,18 @@ public sealed class AzureAiSearchVectorStore : IVectorStore
         if (string.IsNullOrWhiteSpace(_options.IndexName))
             throw new InvalidOperationException("Azure AI Search Index Name is missing.");
 
+        var clientOptions = new SearchClientOptions();
+        clientOptions.Retry.MaxRetries = 0; // Disable SDK native retry so Polly handles it
+
         if (!string.IsNullOrWhiteSpace(_options.ApiKey))
         {
             var credential = new AzureKeyCredential(_options.ApiKey);
-            _indexClient = new SearchIndexClient(new Uri(_options.Endpoint), credential);
+            _indexClient = new SearchIndexClient(new Uri(_options.Endpoint), credential, clientOptions);
         }
         else
         {
             var credential = new DefaultAzureCredential();
-            _indexClient = new SearchIndexClient(new Uri(_options.Endpoint), credential);
+            _indexClient = new SearchIndexClient(new Uri(_options.Endpoint), credential, clientOptions);
         }
 
         _searchClient = _indexClient.GetSearchClient(_options.IndexName);
@@ -68,7 +76,7 @@ public sealed class AzureAiSearchVectorStore : IVectorStore
 
             try
             {
-                await _indexClient.GetIndexAsync(_options.IndexName);
+                await _resiliencePipeline.ExecuteAsync(async token => await _indexClient.GetIndexAsync(_options.IndexName, token));
                 _isInitialized = true;
             }
             catch (RequestFailedException ex) when (ex.Status == 404)
@@ -119,7 +127,7 @@ public sealed class AzureAiSearchVectorStore : IVectorStore
                     }
                 };
 
-                await _indexClient.CreateIndexAsync(index);
+                await _resiliencePipeline.ExecuteAsync(async token => await _indexClient.CreateIndexAsync(index, token));
                 _isInitialized = true;
                 _logger.LogInformation("Successfully created Azure AI Search index '{IndexName}'.", _options.IndexName);
             }
@@ -174,7 +182,8 @@ public sealed class AzureAiSearchVectorStore : IVectorStore
             ["createdAtUtc"] = chunk.CreatedAtUtc
         };
 
-        var response = await _searchClient.UploadDocumentsAsync(new[] { document });
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _searchClient.UploadDocumentsAsync(new[] { document }, cancellationToken: token));
 
         if (response.Value.Results.Any(r => !r.Succeeded))
         {
@@ -276,7 +285,9 @@ public sealed class AzureAiSearchVectorStore : IVectorStore
         });
 
         var stopwatch = Stopwatch.StartNew();
-        var response = await _searchClient.SearchAsync<SearchDocument>(null, searchOptions, cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _searchClient.SearchAsync<SearchDocument>(null, searchOptions, token),
+            cancellationToken);
         stopwatch.Stop();
 
         var results = new List<DocumentChunk>();

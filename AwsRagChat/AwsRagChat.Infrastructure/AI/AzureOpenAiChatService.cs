@@ -14,6 +14,8 @@ using AwsRagChat.Infrastructure.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.AI;
 
@@ -22,13 +24,16 @@ public sealed class AzureOpenAiChatService : IChatProvider
     private readonly ChatClient _client;
     private readonly AzureOpenAiOptions _options;
     private readonly ILogger<AzureOpenAiChatService> _logger;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public AzureOpenAiChatService(
         IOptions<AzureOpenAiOptions> options,
-        ILogger<AzureOpenAiChatService> logger)
+        ILogger<AzureOpenAiChatService> logger,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _options = options.Value;
         _logger = logger;
+        _resiliencePipeline = pipelineProvider.GetPipeline("AzureOpenAiChatPipeline");
 
         if (string.IsNullOrWhiteSpace(_options.Endpoint))
             throw new InvalidOperationException("Azure OpenAI Endpoint is missing.");
@@ -137,7 +142,9 @@ public sealed class AzureOpenAiChatService : IChatProvider
         };
 
         var stopwatch = Stopwatch.StartNew();
-        var response = await _client.CompleteChatAsync(messages, options, cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _client.CompleteChatAsync(messages, options, token),
+            cancellationToken);
         stopwatch.Stop();
 
         _logger.LogInformation(

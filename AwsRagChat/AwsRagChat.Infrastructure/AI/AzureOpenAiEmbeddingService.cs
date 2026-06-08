@@ -12,6 +12,8 @@ using AwsRagChat.Infrastructure.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.AI;
 
@@ -20,13 +22,16 @@ public sealed class AzureOpenAiEmbeddingService : IEmbeddingProvider
     private readonly EmbeddingClient _client;
     private readonly AzureOpenAiOptions _options;
     private readonly ILogger<AzureOpenAiEmbeddingService> _logger;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public AzureOpenAiEmbeddingService(
         IOptions<AzureOpenAiOptions> options,
-        ILogger<AzureOpenAiEmbeddingService> logger)
+        ILogger<AzureOpenAiEmbeddingService> logger,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _options = options.Value;
         _logger = logger;
+        _resiliencePipeline = pipelineProvider.GetPipeline("AzureOpenAiEmbedPipeline");
 
         if (string.IsNullOrWhiteSpace(_options.Endpoint))
             throw new InvalidOperationException("Azure OpenAI Endpoint is missing.");
@@ -56,7 +61,9 @@ public sealed class AzureOpenAiEmbeddingService : IEmbeddingProvider
             throw new ArgumentException("Text is required for embedding.", nameof(text));
 
         var stopwatch = Stopwatch.StartNew();
-        var response = await _client.GenerateEmbeddingAsync(text, cancellationToken: cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _client.GenerateEmbeddingAsync(text, cancellationToken: token),
+            cancellationToken);
         stopwatch.Stop();
 
         _logger.LogInformation(

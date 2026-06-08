@@ -14,6 +14,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Polly;
+using Polly.Registry;
 
 using ApplicationExtractedDocument = AwsRagChat.Application.Models.ExtractedDocument;
 using IngestionExtractedDocument = AwsRagChat.Ingestion.Services.ExtractedDocument;
@@ -27,26 +29,32 @@ public sealed class AzureDocumentProcessor : IDocumentProcessor
     private readonly DocumentIntelligenceClient _client;
     private readonly AzureDocumentProcessingOptions _options;
     private readonly IStorageProvider _storageProvider;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public AzureDocumentProcessor(
         TextExtractionService textExtractionService,
         IOptions<AzureDocumentProcessingOptions> options,
-        IStorageProvider storageProvider)
+        IStorageProvider storageProvider,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _textExtractionService = textExtractionService;
         _options = options.Value;
         _storageProvider = storageProvider;
+        _resiliencePipeline = pipelineProvider.GetPipeline("OcrPipeline");
 
         if (string.IsNullOrWhiteSpace(_options.Endpoint))
             throw new InvalidOperationException("Azure AI Document Intelligence Endpoint is missing.");
 
+        var clientOptions = new DocumentIntelligenceClientOptions();
+        clientOptions.Retry.MaxRetries = 0; // Disable SDK native retry so Polly handles it
+
         if (!string.IsNullOrWhiteSpace(_options.ApiKey))
         {
-            _client = new DocumentIntelligenceClient(new Uri(_options.Endpoint), new AzureKeyCredential(_options.ApiKey));
+            _client = new DocumentIntelligenceClient(new Uri(_options.Endpoint), new AzureKeyCredential(_options.ApiKey), clientOptions);
         }
         else
         {
-            _client = new DocumentIntelligenceClient(new Uri(_options.Endpoint), new DefaultAzureCredential());
+            _client = new DocumentIntelligenceClient(new Uri(_options.Endpoint), new DefaultAzureCredential(), clientOptions);
         }
     }
 
@@ -102,11 +110,13 @@ public sealed class AzureDocumentProcessor : IDocumentProcessor
                 ms.Position = 0;
 
                 // Asynchronous OCR start for multi-cloud parity
-                var operation = await _client.AnalyzeDocumentAsync(
-                    WaitUntil.Started,
-                    _options.ModelId,
-                    BinaryData.FromStream(ms),
-                    cancellationToken: cancellationToken);
+                var operation = await _resiliencePipeline.ExecuteAsync(
+                    async token => await _client.AnalyzeDocumentAsync(
+                        WaitUntil.Started,
+                        _options.ModelId,
+                        BinaryData.FromStream(ms),
+                        cancellationToken: token),
+                    cancellationToken);
 
                 return new DocumentProcessingResult
                 {
@@ -140,11 +150,13 @@ public sealed class AzureDocumentProcessor : IDocumentProcessor
             ms.Position = 0;
 
             // Synchronous extraction compatibility
-            var operation = await _client.AnalyzeDocumentAsync(
-                WaitUntil.Completed,
-                _options.ModelId,
-                BinaryData.FromStream(ms),
-                cancellationToken: cancellationToken);
+            var operation = await _resiliencePipeline.ExecuteAsync(
+                async token => await _client.AnalyzeDocumentAsync(
+                    WaitUntil.Completed,
+                    _options.ModelId,
+                    BinaryData.FromStream(ms),
+                    cancellationToken: token),
+                cancellationToken);
 
             var analyzeResult = operation.Value;
 
@@ -178,7 +190,9 @@ public sealed class AzureDocumentProcessor : IDocumentProcessor
         var uriString = $"{_options.Endpoint.TrimEnd('/')}/documentintelligence/documentModels/{Uri.EscapeDataString(_options.ModelId)}/analyzeResults/{Uri.EscapeDataString(request.OcrJobId)}?api-version=2024-11-30";
         pipelineRequest.Uri.Reset(new Uri(uriString));
 
-        var response = await _client.Pipeline.SendRequestAsync(pipelineRequest, cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _client.Pipeline.SendRequestAsync(pipelineRequest, token),
+            cancellationToken);
         if (response.Status != 200)
         {
             throw new RequestFailedException(response);

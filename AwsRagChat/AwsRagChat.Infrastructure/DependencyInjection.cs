@@ -4,6 +4,7 @@ using AwsRagChat.Infrastructure.AI;
 using AwsRagChat.Infrastructure.Options;
 using AwsRagChat.Infrastructure.Persistence;
 using AwsRagChat.Infrastructure.Storage;
+using AwsRagChat.Infrastructure.Resilience;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using AwsRagChat.Infrastructure.Services;
@@ -170,6 +171,9 @@ public static class DependencyInjection
         services.AddScoped<ChatService>();
         services.AddScoped<IUserApprovalService, UserApprovalService>();
         services.AddScoped<IAdminAnalyticsService, AdminAnalyticsService>();
+
+        // Register central Polly resilience pipelines
+        services.AddCustomResiliencePipelines();
 
         return services;
     }

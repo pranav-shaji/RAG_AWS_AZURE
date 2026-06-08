@@ -9,6 +9,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Persistence;
 
@@ -16,16 +18,19 @@ public sealed class CosmosDbChunkRepository : IChunkRepository
 {
     private readonly CosmosClient _cosmosClient;
     private readonly CosmosDbOptions _options;
+    private readonly ResiliencePipeline _resiliencePipeline;
     private Container _container = null!;
     private static readonly SemaphoreSlim _initializeSemaphore = new(1, 1);
     private static bool _isInitialized;
 
     public CosmosDbChunkRepository(
         CosmosClient cosmosClient,
-        IOptions<CosmosDbOptions> options)
+        IOptions<CosmosDbOptions> options,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _cosmosClient = cosmosClient;
         _options = options.Value;
+        _resiliencePipeline = pipelineProvider.GetPipeline("CosmosDbPipeline");
     }
 
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
@@ -39,10 +44,14 @@ public sealed class CosmosDbChunkRepository : IChunkRepository
             if (_isInitialized && _container != null)
                 return;
 
-            var dbResponse = await _cosmosClient.CreateDatabaseIfNotExistsAsync(_options.DatabaseName, cancellationToken: cancellationToken);
-            var containerResponse = await dbResponse.Database.CreateContainerIfNotExistsAsync(
-                new ContainerProperties(_options.ChunksContainer, "/documentId"),
-                cancellationToken: cancellationToken);
+            var dbResponse = await _resiliencePipeline.ExecuteAsync(
+                async token => await _cosmosClient.CreateDatabaseIfNotExistsAsync(_options.DatabaseName, cancellationToken: token),
+                cancellationToken);
+            var containerResponse = await _resiliencePipeline.ExecuteAsync(
+                async token => await dbResponse.Database.CreateContainerIfNotExistsAsync(
+                    new ContainerProperties(_options.ChunksContainer, "/documentId"),
+                    cancellationToken: token),
+                cancellationToken);
 
             _container = containerResponse.Container;
             _isInitialized = true;
@@ -80,7 +89,9 @@ public sealed class CosmosDbChunkRepository : IChunkRepository
                 Embedding = chunk.Embedding.ToList()
             };
 
-            await _container.UpsertItemAsync(model, new PartitionKey(chunk.DocumentId), cancellationToken: cancellationToken);
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.UpsertItemAsync(model, new PartitionKey(chunk.DocumentId), cancellationToken: token),
+                cancellationToken);
         }
     }
 
@@ -108,7 +119,9 @@ public sealed class CosmosDbChunkRepository : IChunkRepository
         var results = new List<DocumentChunk>();
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             results.AddRange(response.Select(Map));
         }
 
@@ -135,7 +148,9 @@ public sealed class CosmosDbChunkRepository : IChunkRepository
 
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             results.AddRange(response.Select(Map));
         }
 
@@ -172,7 +187,9 @@ public sealed class CosmosDbChunkRepository : IChunkRepository
             var chunks = new List<DocumentChunk>();
             while (iterator.HasMoreResults)
             {
-                var response = await iterator.ReadNextAsync(cancellationToken);
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
                 chunks.AddRange(response.Select(Map));
             }
             return chunks;

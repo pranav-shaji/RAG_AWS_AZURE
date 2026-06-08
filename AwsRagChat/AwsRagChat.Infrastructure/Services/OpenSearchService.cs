@@ -10,6 +10,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Services;
 
@@ -18,12 +20,15 @@ public sealed class OpenSearchService : IVectorStore
     private readonly IOpenSearchClient _client;
     private readonly string _indexName;
     private readonly ILogger<OpenSearchService>? _logger;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public OpenSearchService(
         IConfiguration config,
+        ResiliencePipelineProvider<string> pipelineProvider,
         ILogger<OpenSearchService>? logger = null)
     {
         _logger = logger;
+        _resiliencePipeline = pipelineProvider.GetPipeline("OpenSearchPipeline");
 
         var endpoint = config["VectorStore:Endpoint"] ?? config["OpenSearch:Endpoint"];
         var region = config["AWS:Region"] ?? "us-east-1";
@@ -46,6 +51,7 @@ public sealed class OpenSearchService : IVectorStore
         var pool = new SingleNodeConnectionPool(new Uri(endpoint));
 
         var settings = new ConnectionSettings(pool, awsConnection)
+            .ThrowExceptions(true)
             .DefaultIndex(_indexName);
 
         _client = new OpenSearchClient(settings);
@@ -89,10 +95,11 @@ public sealed class OpenSearchService : IVectorStore
             createdAtUtc = chunk.CreatedAtUtc
         };
 
-        var response = await _client.IndexAsync(document, i => i
-            .Index(_indexName)
-            .Id($"{chunk.OwnerUserId}:{chunk.DocumentId}:{chunk.ChunkId}")
-            .Refresh(Refresh.WaitFor));
+        var response = await _resiliencePipeline.ExecuteAsync(async token =>
+            await _client.IndexAsync(document, i => i
+                .Index(_indexName)
+                .Id($"{chunk.OwnerUserId}:{chunk.DocumentId}:{chunk.ChunkId}")
+                .Refresh(Refresh.WaitFor), token));
 
         if (!response.IsValid)
             throw new InvalidOperationException($"Vector search indexing failed: {response.DebugInformation}");
@@ -220,9 +227,13 @@ public sealed class OpenSearchService : IVectorStore
         var json = JsonSerializer.Serialize(requestBody);
 
         var stopwatch = Stopwatch.StartNew();
-        var response = await _client.LowLevel.SearchAsync<StringResponse>(
-            _indexName,
-            PostData.String(json));
+        var response = await _resiliencePipeline.ExecuteAsync(async token =>
+            await _client.LowLevel.SearchAsync<StringResponse>(
+                _indexName,
+                PostData.String(json),
+                null,
+                token),
+            cancellationToken);
         stopwatch.Stop();
 
         if (!response.Success)

@@ -5,6 +5,8 @@ using AwsRagChat.Domain.Entities;
 using AwsRagChat.Infrastructure.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Persistence;
 
@@ -15,15 +17,18 @@ public sealed class DynamoDbChunkRepository : IChunkRepository
     private readonly IAmazonDynamoDB _amazonDynamoDb;
     private readonly DynamoDbOptions _dynamoDbOptions;
     private readonly ILogger<DynamoDbChunkRepository>? _logger;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public DynamoDbChunkRepository(
         IAmazonDynamoDB amazonDynamoDb,
         IOptions<DynamoDbOptions> dynamoDbOptions,
+        ResiliencePipelineProvider<string> pipelineProvider,
         ILogger<DynamoDbChunkRepository>? logger = null)
     {
         _amazonDynamoDb = amazonDynamoDb;
         _dynamoDbOptions = dynamoDbOptions.Value;
         _logger = logger;
+        _resiliencePipeline = pipelineProvider.GetPipeline("DynamoDbPipeline");
     }
 
     public async Task SaveChunksAsync(
@@ -70,7 +75,9 @@ public sealed class DynamoDbChunkRepository : IChunkRepository
                 Item = item
             };
 
-            await _amazonDynamoDb.PutItemAsync(request, cancellationToken);
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _amazonDynamoDb.PutItemAsync(request, token),
+                cancellationToken);
         }
     }
 
@@ -118,8 +125,8 @@ public sealed class DynamoDbChunkRepository : IChunkRepository
 
         do
         {
-            response = await _amazonDynamoDb.ScanAsync(
-                request,
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _amazonDynamoDb.ScanAsync(request, token),
                 cancellationToken);
 
             results.AddRange(
@@ -159,8 +166,8 @@ public sealed class DynamoDbChunkRepository : IChunkRepository
 
         do
         {
-            response = await _amazonDynamoDb.ScanAsync(
-                request,
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _amazonDynamoDb.ScanAsync(request, token),
                 cancellationToken);
 
             results.AddRange(
@@ -221,7 +228,9 @@ public sealed class DynamoDbChunkRepository : IChunkRepository
 
         do
         {
-            response = await _amazonDynamoDb.ScanAsync(request, cancellationToken);
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _amazonDynamoDb.ScanAsync(request, token),
+                cancellationToken);
 
             foreach (var item in response.Items)
             {
@@ -321,8 +330,8 @@ public sealed class DynamoDbChunkRepository : IChunkRepository
 
         do
         {
-            response = await _amazonDynamoDb.QueryAsync(
-                request,
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _amazonDynamoDb.QueryAsync(request, token),
                 cancellationToken);
 
             results.AddRange(response.Items.Select(MapToChunk));

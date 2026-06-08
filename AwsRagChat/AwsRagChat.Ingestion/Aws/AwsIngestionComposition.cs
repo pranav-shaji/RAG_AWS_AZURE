@@ -9,6 +9,8 @@ using AwsRagChat.Infrastructure.Storage;
 using AwsRagChat.Infrastructure.Persistence;
 using AwsRagChat.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using AwsRagChat.Infrastructure.Resilience;
 using InfrastructureDynamoDbOptions = AwsRagChat.Infrastructure.Options.DynamoDbOptions;
 using InfrastructureS3Options = AwsRagChat.Infrastructure.Options.S3Options;
 
@@ -66,30 +68,43 @@ public static class AwsIngestionComposition
         }
         var s3Options = Microsoft.Extensions.Options.Options.Create(s3OptionsObj);
 
-        var amazonS3 = new AmazonS3Client();
-        var dynamoDb = new AmazonDynamoDBClient();
-        var bedrock = new AmazonBedrockRuntimeClient();
-        var textract = new AmazonTextractClient();
+        // 2. Setup Resilience Pipeline Provider
+        var resilienceServices = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        resilienceServices.AddCustomResiliencePipelines();
+        var resilienceProvider = resilienceServices.BuildServiceProvider();
+        var pipelineProvider = resilienceProvider.GetRequiredService<Polly.Registry.ResiliencePipelineProvider<string>>();
+
+        // 3. Instantiate AWS Clients with MaxErrorRetry = 1 to prevent retry amplification
+        var s3Config = new AmazonS3Config { MaxErrorRetry = 1 };
+        var dynamoDbConfig = new AmazonDynamoDBConfig { MaxErrorRetry = 1 };
+        var bedrockConfig = new AmazonBedrockRuntimeConfig { MaxErrorRetry = 1 };
+        var textractConfig = new AmazonTextractConfig { MaxErrorRetry = 1 };
+
+        var amazonS3 = new AmazonS3Client(s3Config);
+        var dynamoDb = new AmazonDynamoDBClient(dynamoDbConfig);
+        var bedrock = new AmazonBedrockRuntimeClient(bedrockConfig);
+        var textract = new AmazonTextractClient(textractConfig);
 
         var textExtractionService = new TextExtractionService();
         var textractTextExtractionService = new TextractTextExtractionService(textract);
         var textractAsyncExtractionService = new TextractAsyncExtractionService(textract, textractAsyncOptions);
-        var storageProvider = new S3StorageService(amazonS3, s3Options);
+        var storageProvider = new S3StorageService(amazonS3, s3Options, pipelineProvider);
         var documentProcessor = new AwsDocumentProcessor(
             textExtractionService,
             textractTextExtractionService,
             textractAsyncExtractionService,
-            storageProvider);
+            storageProvider,
+            pipelineProvider);
 
         var chunkingService = new ChunkingService();
-        var embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions);
-        var chunkRepository = new DynamoDbChunkRepository(dynamoDb, infrastructureDynamoDbOptions);
+        var embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions, pipelineProvider);
+        var chunkRepository = new DynamoDbChunkRepository(dynamoDb, infrastructureDynamoDbOptions, pipelineProvider);
 
         var documentStatusService = new DocumentStatusService(
             dynamoDb,
             configuration["DynamoDb:DocumentsTableName"] ?? "rag-documents");
 
-        var openSearchService = new OpenSearchService(configuration);
+        var openSearchService = new OpenSearchService(configuration, pipelineProvider);
 
         var documentIngestionPipeline = new DocumentIngestionPipeline(
             chunkingService,

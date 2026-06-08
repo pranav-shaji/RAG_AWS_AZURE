@@ -9,6 +9,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Persistence;
 
@@ -16,16 +18,19 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
 {
     private readonly CosmosClient _cosmosClient;
     private readonly CosmosDbOptions _options;
+    private readonly ResiliencePipeline _resiliencePipeline;
     private Container _container = null!;
     private static readonly SemaphoreSlim _initializeSemaphore = new(1, 1);
     private static bool _isInitialized;
 
     public CosmosDbConversationRepository(
         CosmosClient cosmosClient,
-        IOptions<CosmosDbOptions> options)
+        IOptions<CosmosDbOptions> options,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _cosmosClient = cosmosClient;
         _options = options.Value;
+        _resiliencePipeline = pipelineProvider.GetPipeline("CosmosDbPipeline");
     }
 
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
@@ -39,10 +44,14 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
             if (_isInitialized && _container != null)
                 return;
 
-            var dbResponse = await _cosmosClient.CreateDatabaseIfNotExistsAsync(_options.DatabaseName, cancellationToken: cancellationToken);
-            var containerResponse = await dbResponse.Database.CreateContainerIfNotExistsAsync(
-                new ContainerProperties(_options.ConversationsContainer, "/ownerUserId"),
-                cancellationToken: cancellationToken);
+            var dbResponse = await _resiliencePipeline.ExecuteAsync(
+                async token => await _cosmosClient.CreateDatabaseIfNotExistsAsync(_options.DatabaseName, cancellationToken: token),
+                cancellationToken);
+            var containerResponse = await _resiliencePipeline.ExecuteAsync(
+                async token => await dbResponse.Database.CreateContainerIfNotExistsAsync(
+                    new ContainerProperties(_options.ConversationsContainer, "/ownerUserId"),
+                    cancellationToken: token),
+                cancellationToken);
 
             _container = containerResponse.Container;
             _isInitialized = true;
@@ -75,7 +84,9 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
             IsArchived = session.IsArchived
         };
 
-        await _container.UpsertItemAsync(model, new PartitionKey(session.OwnerUserId), cancellationToken: cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _container.UpsertItemAsync(model, new PartitionKey(session.OwnerUserId), cancellationToken: token),
+            cancellationToken);
     }
 
     public async Task<ConversationSession?> GetSessionAsync(
@@ -93,10 +104,12 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
 
         try
         {
-            var response = await _container.ReadItemAsync<CosmosSessionModel>(
-                $"session_{sessionId}",
-                new PartitionKey(ownerUserId),
-                cancellationToken: cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.ReadItemAsync<CosmosSessionModel>(
+                    $"session_{sessionId}",
+                    new PartitionKey(ownerUserId),
+                    cancellationToken: token),
+                cancellationToken);
 
             return MapSession(response.Resource);
         }
@@ -125,7 +138,9 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         var results = new List<ConversationSession>();
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             results.AddRange(response.Select(MapSession));
         }
 
@@ -158,7 +173,9 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
             Citations = message.Citations.Select(MapCitation).ToList()
         };
 
-        await _container.UpsertItemAsync(model, new PartitionKey(message.OwnerUserId), cancellationToken: cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _container.UpsertItemAsync(model, new PartitionKey(message.OwnerUserId), cancellationToken: token),
+            cancellationToken);
     }
 
     public async Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
@@ -190,7 +207,9 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         var results = new List<ConversationMessage>();
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             results.AddRange(response.Select(MapMessage));
         }
 
@@ -224,13 +243,17 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         var idsToDelete = new List<string>();
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             idsToDelete.AddRange(response.Select(x => x.Id));
         }
 
         foreach (var id in idsToDelete)
         {
-            await _container.DeleteItemAsync<object>(id, new PartitionKey(ownerUserId), cancellationToken: cancellationToken);
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.DeleteItemAsync<object>(id, new PartitionKey(ownerUserId), cancellationToken: token),
+                cancellationToken);
         }
     }
 
@@ -248,7 +271,9 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
 
         if (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             results.AddRange(response.Select(MapSession));
         }
 
@@ -274,7 +299,9 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         var iterator = _container.GetItemQueryIterator<T?>(queryDefinition);
         if (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             var val = response.FirstOrDefault();
             return val ?? default!;
         }

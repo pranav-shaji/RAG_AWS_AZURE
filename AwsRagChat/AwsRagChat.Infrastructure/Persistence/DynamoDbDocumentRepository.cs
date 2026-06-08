@@ -4,6 +4,8 @@ using AwsRagChat.Application.Interfaces;
 using Microsoft.Extensions.Configuration;
 using System.Globalization;
 using System.Text;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Persistence;
 
@@ -14,13 +16,16 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
     private readonly IAmazonDynamoDB _dynamoDb;
     private readonly string _tableName;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public DynamoDbDocumentRepository(
         IAmazonDynamoDB dynamoDb,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _dynamoDb = dynamoDb;
         _tableName = configuration["DynamoDb:DocumentsTableName"] ?? DefaultTableName;
+        _resiliencePipeline = pipelineProvider.GetPipeline("DynamoDbPipeline");
     }
 
     public async Task<ExistingDocumentRecord?> FindByOwnerAndHashAsync(
@@ -34,18 +39,19 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
         if (string.IsNullOrWhiteSpace(fileHash))
             throw new ArgumentException("FileHash is required.", nameof(fileHash));
 
-        var response = await _dynamoDb.QueryAsync(new QueryRequest
-        {
-            TableName = _tableName,
-            IndexName = OwnerFileHashIndexName,
-            KeyConditionExpression = "OwnerUserId = :ownerUserId AND FileHash = :fileHash",
-            ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _dynamoDb.QueryAsync(new QueryRequest
             {
-                [":ownerUserId"] = new AttributeValue { S = ownerUserId },
-                [":fileHash"] = new AttributeValue { S = fileHash }
-            },
-            Limit = 1
-        }, cancellationToken);
+                TableName = _tableName,
+                IndexName = OwnerFileHashIndexName,
+                KeyConditionExpression = "OwnerUserId = :ownerUserId AND FileHash = :fileHash",
+                ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+                {
+                    [":ownerUserId"] = new AttributeValue { S = ownerUserId },
+                    [":fileHash"] = new AttributeValue { S = fileHash }
+                },
+                Limit = 1
+            }, token), cancellationToken);
 
         var item = response.Items.FirstOrDefault();
 
@@ -62,14 +68,15 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
         if (string.IsNullOrWhiteSpace(documentId))
             throw new ArgumentException("DocumentId is required.", nameof(documentId));
 
-        var response = await _dynamoDb.GetItemAsync(new GetItemRequest
-        {
-            TableName = _tableName,
-            Key = new Dictionary<string, AttributeValue>
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _dynamoDb.GetItemAsync(new GetItemRequest
             {
-                ["DocumentId"] = new AttributeValue { S = documentId }
-            }
-        }, cancellationToken);
+                TableName = _tableName,
+                Key = new Dictionary<string, AttributeValue>
+                {
+                    ["DocumentId"] = new AttributeValue { S = documentId }
+                }
+            }, token), cancellationToken);
 
         if (response.Item is null || response.Item.Count == 0)
             return null;
@@ -91,7 +98,9 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
         do
         {
-            response = await _dynamoDb.ScanAsync(request, cancellationToken);
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _dynamoDb.ScanAsync(request, token),
+                cancellationToken);
 
             documents.AddRange(response.Items.Select(Map));
 
@@ -126,8 +135,8 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
         if (exclusiveStartKey is not null)
             request.ExclusiveStartKey = exclusiveStartKey;
 
-        var response = await _dynamoDb.ScanAsync(
-            request,
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _dynamoDb.ScanAsync(request, token),
             cancellationToken);
 
         return new PagedResult<ExistingDocumentRecord>
@@ -158,8 +167,8 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
         do
         {
-            response = await _dynamoDb.ScanAsync(
-                request,
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _dynamoDb.ScanAsync(request, token),
                 cancellationToken);
 
             foreach (var item in response.Items)
@@ -200,7 +209,9 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
         do
         {
-            response = await _dynamoDb.ScanAsync(request, cancellationToken);
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _dynamoDb.ScanAsync(request, token),
+                cancellationToken);
 
             count += response.Count ?? 0;
 
@@ -236,8 +247,8 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
     do
     {
-        response = await _dynamoDb.ScanAsync(
-            request,
+        response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _dynamoDb.ScanAsync(request, token),
             cancellationToken);
 
         documents.AddRange(response.Items.Select(Map));
@@ -279,7 +290,9 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
         do
         {
-            response = await _dynamoDb.ScanAsync(request, cancellationToken);
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _dynamoDb.ScanAsync(request, token),
+                cancellationToken);
 
             count += response.Count ?? 0;
 
@@ -304,7 +317,9 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
         do
         {
-            response = await _dynamoDb.ScanAsync(request, cancellationToken);
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _dynamoDb.ScanAsync(request, token),
+                cancellationToken);
 
             foreach (var item in response.Items)
             {
@@ -344,8 +359,8 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
         do
         {
-            response = await _dynamoDb.ScanAsync(
-                request,
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _dynamoDb.ScanAsync(request, token),
                 cancellationToken);
 
             documents.AddRange(
@@ -377,7 +392,9 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
         do
         {
-            response = await _dynamoDb.ScanAsync(request, cancellationToken);
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _dynamoDb.ScanAsync(request, token),
+                cancellationToken);
 
             foreach (var item in response.Items)
             {
@@ -443,12 +460,13 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
             ["UpdatedAtUtc"] = new AttributeValue { S = now }
         };
 
-        await _dynamoDb.PutItemAsync(new PutItemRequest
-        {
-            TableName = _tableName,
-            Item = item,
-            ConditionExpression = "attribute_not_exists(DocumentId)"
-        }, cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _dynamoDb.PutItemAsync(new PutItemRequest
+            {
+                TableName = _tableName,
+                Item = item,
+                ConditionExpression = "attribute_not_exists(DocumentId)"
+            }, token), cancellationToken);
     }
 
     public async Task<List<ExistingDocumentRecord>> GetDocumentsByUserAsync(
@@ -474,7 +492,9 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
         do
         {
-            response = await _dynamoDb.ScanAsync(request, cancellationToken);
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _dynamoDb.ScanAsync(request, token),
+                cancellationToken);
 
             documents.AddRange(response.Items.Select(Map));
 
@@ -512,7 +532,9 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
 
         do
         {
-            response = await _dynamoDb.ScanAsync(request, cancellationToken);
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _dynamoDb.ScanAsync(request, token),
+                cancellationToken);
             count += response.Count ?? 0;
             request.ExclusiveStartKey = response.LastEvaluatedKey;
         }
@@ -532,24 +554,25 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
         if (string.IsNullOrWhiteSpace(status))
             throw new ArgumentException("Status is required.", nameof(status));
 
-        await _dynamoDb.UpdateItemAsync(new UpdateItemRequest
-        {
-            TableName = _tableName,
-            Key = new Dictionary<string, AttributeValue>
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _dynamoDb.UpdateItemAsync(new UpdateItemRequest
             {
-                ["DocumentId"] = new AttributeValue { S = documentId }
-            },
-            UpdateExpression = "SET #status = :status, UpdatedAtUtc = :updatedAtUtc",
-            ExpressionAttributeNames = new Dictionary<string, string>
-            {
-                ["#status"] = "Status"
-            },
-            ExpressionAttributeValues = new Dictionary<string, AttributeValue>
-            {
-                [":status"] = new AttributeValue { S = status },
-                [":updatedAtUtc"] = new AttributeValue { S = DateTime.UtcNow.ToString("O") }
-            }
-        }, cancellationToken);
+                TableName = _tableName,
+                Key = new Dictionary<string, AttributeValue>
+                {
+                    ["DocumentId"] = new AttributeValue { S = documentId }
+                },
+                UpdateExpression = "SET #status = :status, UpdatedAtUtc = :updatedAtUtc",
+                ExpressionAttributeNames = new Dictionary<string, string>
+                {
+                    ["#status"] = "Status"
+                },
+                ExpressionAttributeValues = new Dictionary<string, AttributeValue>
+                {
+                    [":status"] = new AttributeValue { S = status },
+                    [":updatedAtUtc"] = new AttributeValue { S = DateTime.UtcNow.ToString("O") }
+                }
+            }, token), cancellationToken);
     }
 
     public async Task MarkIndexedAsync(
@@ -558,36 +581,37 @@ public sealed class DynamoDbDocumentRepository : IDocumentRepository
         int pageCount,
         CancellationToken cancellationToken = default)
     {
-        await _dynamoDb.UpdateItemAsync(new UpdateItemRequest
-        {
-            TableName = _tableName,
-            Key = new Dictionary<string, AttributeValue>
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _dynamoDb.UpdateItemAsync(new UpdateItemRequest
             {
-                ["DocumentId"] = new AttributeValue { S = documentId }
-            },
-            UpdateExpression =
-                "SET #status = :status, ChunkCount = :chunkCount, PageCount = :pageCount, UpdatedAtUtc = :updatedAtUtc",
-            ExpressionAttributeNames = new Dictionary<string, string>
-            {
-                ["#status"] = "Status"
-            },
-            ExpressionAttributeValues = new Dictionary<string, AttributeValue>
-            {
-                [":status"] = new AttributeValue { S = "INDEXED" },
-                [":chunkCount"] = new AttributeValue
+                TableName = _tableName,
+                Key = new Dictionary<string, AttributeValue>
                 {
-                    N = chunkCount.ToString(CultureInfo.InvariantCulture)
+                    ["DocumentId"] = new AttributeValue { S = documentId }
                 },
-                [":pageCount"] = new AttributeValue
+                UpdateExpression =
+                    "SET #status = :status, ChunkCount = :chunkCount, PageCount = :pageCount, UpdatedAtUtc = :updatedAtUtc",
+                ExpressionAttributeNames = new Dictionary<string, string>
                 {
-                    N = Math.Max(pageCount, 0).ToString(CultureInfo.InvariantCulture)
+                    ["#status"] = "Status"
                 },
-                [":updatedAtUtc"] = new AttributeValue
+                ExpressionAttributeValues = new Dictionary<string, AttributeValue>
                 {
-                    S = DateTime.UtcNow.ToString("O")
+                    [":status"] = new AttributeValue { S = "INDEXED" },
+                    [":chunkCount"] = new AttributeValue
+                    {
+                        N = chunkCount.ToString(CultureInfo.InvariantCulture)
+                    },
+                    [":pageCount"] = new AttributeValue
+                    {
+                        N = Math.Max(pageCount, 0).ToString(CultureInfo.InvariantCulture)
+                    },
+                    [":updatedAtUtc"] = new AttributeValue
+                    {
+                        S = DateTime.UtcNow.ToString("O")
+                    }
                 }
-            }
-        }, cancellationToken);
+            }, token), cancellationToken);
     }
 
     public async Task MarkFailedAsync(

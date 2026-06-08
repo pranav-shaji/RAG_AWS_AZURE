@@ -1,10 +1,12 @@
-﻿using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.Model;
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Domain.Entities;
 using AwsRagChat.Infrastructure.Options;
 using Microsoft.Extensions.Options;
 using System.Globalization;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Persistence;
 
@@ -12,13 +14,16 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
 {
     private readonly IAmazonDynamoDB _amazonDynamoDb;
     private readonly ConversationStorageOptions _conversationOptions;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public DynamoDbConversationRepository(
         IAmazonDynamoDB amazonDynamoDb,
-        IOptions<ConversationStorageOptions> conversationOptions)
+        IOptions<ConversationStorageOptions> conversationOptions,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _amazonDynamoDb = amazonDynamoDb;
         _conversationOptions = conversationOptions.Value;
+        _resiliencePipeline = pipelineProvider.GetPipeline("DynamoDbPipeline");
     }
 
     public async Task UpsertSessionAsync(
@@ -49,7 +54,9 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
             Item = item
         };
 
-        await _amazonDynamoDb.PutItemAsync(request, cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _amazonDynamoDb.PutItemAsync(request, token),
+            cancellationToken);
     }
 
     public async Task<ConversationSession?> GetSessionAsync(
@@ -74,7 +81,9 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
             }
         };
 
-        var response = await _amazonDynamoDb.GetItemAsync(request, cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _amazonDynamoDb.GetItemAsync(request, token),
+            cancellationToken);
 
         if (response.Item is null || response.Item.Count == 0)
             return null;
@@ -106,7 +115,9 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
 
         do
         {
-            response = await _amazonDynamoDb.QueryAsync(request, cancellationToken);
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _amazonDynamoDb.QueryAsync(request, token),
+                cancellationToken);
 
             sessions.AddRange(response.Items.Select(MapSession));
 
@@ -152,7 +163,9 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
             Item = item
         };
 
-        await _amazonDynamoDb.PutItemAsync(request, cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _amazonDynamoDb.PutItemAsync(request, token),
+            cancellationToken);
     }
 
     public async Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
@@ -184,7 +197,9 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
             Limit = take
         };
 
-        var response = await _amazonDynamoDb.QueryAsync(request, cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _amazonDynamoDb.QueryAsync(request, token),
+            cancellationToken);
 
         return response.Items
             .Select(MapMessage)
@@ -204,8 +219,8 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
 
         var sessions = new List<ConversationSession>();
 
-        var response = await _amazonDynamoDb.ScanAsync(
-            request,
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _amazonDynamoDb.ScanAsync(request, token),
             cancellationToken);
 
         sessions.AddRange(
@@ -235,8 +250,8 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
 
         do
         {
-            response = await _amazonDynamoDb.ScanAsync(
-                request,
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _amazonDynamoDb.ScanAsync(request, token),
                 cancellationToken);
 
             total += response.Items.Count(x =>
@@ -264,8 +279,8 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
 
         do
         {
-            response = await _amazonDynamoDb.ScanAsync(
-                request,
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _amazonDynamoDb.ScanAsync(request, token),
                 cancellationToken);
 
             total += response.Items.Count(x =>
@@ -307,7 +322,9 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
             }
         };
 
-        await _amazonDynamoDb.DeleteItemAsync(request, cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _amazonDynamoDb.DeleteItemAsync(request, token),
+            cancellationToken);
     }
 
     private async Task DeleteBatchAsync(
@@ -334,7 +351,9 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
 
         do
         {
-            var response = await _amazonDynamoDb.BatchWriteItemAsync(request, cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _amazonDynamoDb.BatchWriteItemAsync(request, token),
+                cancellationToken);
 
             request.RequestItems = response.UnprocessedItems;
 
@@ -368,7 +387,9 @@ public sealed class DynamoDbConversationRepository : IConversationRepository
 
         do
         {
-            response = await _amazonDynamoDb.QueryAsync(request, cancellationToken);
+            response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _amazonDynamoDb.QueryAsync(request, token),
+                cancellationToken);
 
             keys.AddRange(response.Items.Select(item => new Dictionary<string, AttributeValue>
             {

@@ -28,10 +28,12 @@ public static class AwsProviderServiceCollectionExtensions
         }
 
         // 1. Register AWS SDK Clients
-        services.AddDefaultAWSOptions(new AWSOptions
+        var awsOptions = new AWSOptions
         {
             Region = RegionEndpoint.GetBySystemName(awsRegion)
-        });
+        };
+        awsOptions.DefaultClientConfig.MaxErrorRetry = 1; // Prevent SDK-level retry amplification, let Polly handle it
+        services.AddDefaultAWSOptions(awsOptions);
 
         services.AddAWSService<IAmazonS3>();
         services.AddAWSService<IAmazonDynamoDB>();

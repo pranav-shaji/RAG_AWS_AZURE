@@ -1,9 +1,16 @@
-﻿using Amazon.S3;
+using Amazon.S3;
 using Amazon.S3.Model;
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Application.Models;
 using AwsRagChat.Infrastructure.Options;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Registry;
+using System;
+using System.IO;
+using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace AwsRagChat.Infrastructure.Storage;
 
@@ -11,13 +18,16 @@ public sealed class S3StorageService : IStorageProvider
 {
     private readonly IAmazonS3 _amazonS3;
     private readonly S3Options _s3Options;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public S3StorageService(
         IAmazonS3 amazonS3,
-        IOptions<S3Options> s3Options)
+        IOptions<S3Options> s3Options,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _amazonS3 = amazonS3;
         _s3Options = s3Options.Value;
+        _resiliencePipeline = pipelineProvider.GetPipeline("S3Pipeline");
     }
 
     public async Task<string> UploadAsync(Stream stream, string key, CancellationToken cancellationToken = default)
@@ -38,7 +48,9 @@ public sealed class S3StorageService : IStorageProvider
             InputStream = stream
         };
 
-        var response = await _amazonS3.PutObjectAsync(request, cancellationToken);
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _amazonS3.PutObjectAsync(request, token),
+            cancellationToken);
 
         if (response.HttpStatusCode != System.Net.HttpStatusCode.OK)
         {
@@ -78,7 +90,7 @@ public sealed class S3StorageService : IStorageProvider
             throw new ArgumentNullException(nameof(request));
 
         if (string.IsNullOrWhiteSpace(request.ObjectKey))
-            throw new ArgumentException("Storage object key is required.", nameof(request));
+            throw new ArgumentException("Storage object key is required.", nameof(request.ObjectKey));
 
         var bucketName = string.IsNullOrWhiteSpace(request.BucketOrContainerName)
             ? _s3Options.BucketName
@@ -87,9 +99,8 @@ public sealed class S3StorageService : IStorageProvider
         if (string.IsNullOrWhiteSpace(bucketName))
             throw new InvalidOperationException("S3 bucket name is not configured.");
 
-        var response = await _amazonS3.GetObjectAsync(
-            bucketName,
-            request.ObjectKey,
+        var response = await _resiliencePipeline.ExecuteAsync(
+            async token => await _amazonS3.GetObjectAsync(bucketName, request.ObjectKey, token),
             cancellationToken);
 
         return new StorageObjectReadResult

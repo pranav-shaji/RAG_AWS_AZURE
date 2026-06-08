@@ -9,6 +9,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Polly;
+using Polly.Registry;
 
 namespace AwsRagChat.Infrastructure.Persistence;
 
@@ -16,16 +18,19 @@ public sealed class CosmosDbUserRepository : IUserRepository
 {
     private readonly CosmosClient _cosmosClient;
     private readonly CosmosDbOptions _options;
+    private readonly ResiliencePipeline _resiliencePipeline;
     private Container _container = null!;
     private static readonly SemaphoreSlim _initializeSemaphore = new(1, 1);
     private static bool _isInitialized;
 
     public CosmosDbUserRepository(
         CosmosClient cosmosClient,
-        IOptions<CosmosDbOptions> options)
+        IOptions<CosmosDbOptions> options,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _cosmosClient = cosmosClient;
         _options = options.Value;
+        _resiliencePipeline = pipelineProvider.GetPipeline("CosmosDbPipeline");
     }
 
     private async Task EnsureInitializedAsync(CancellationToken cancellationToken = default)
@@ -39,10 +44,14 @@ public sealed class CosmosDbUserRepository : IUserRepository
             if (_isInitialized && _container != null)
                 return;
 
-            var dbResponse = await _cosmosClient.CreateDatabaseIfNotExistsAsync(_options.DatabaseName, cancellationToken: cancellationToken);
-            var containerResponse = await dbResponse.Database.CreateContainerIfNotExistsAsync(
-                new ContainerProperties(_options.UsersContainer, "/id"),
-                cancellationToken: cancellationToken);
+            var dbResponse = await _resiliencePipeline.ExecuteAsync(
+                async token => await _cosmosClient.CreateDatabaseIfNotExistsAsync(_options.DatabaseName, cancellationToken: token),
+                cancellationToken);
+            var containerResponse = await _resiliencePipeline.ExecuteAsync(
+                async token => await dbResponse.Database.CreateContainerIfNotExistsAsync(
+                    new ContainerProperties(_options.UsersContainer, "/id"),
+                    cancellationToken: token),
+                cancellationToken);
 
             _container = containerResponse.Container;
             _isInitialized = true;
@@ -64,10 +73,12 @@ public sealed class CosmosDbUserRepository : IUserRepository
 
         try
         {
-            var response = await _container.ReadItemAsync<CosmosUserModel>(
-                userId,
-                new PartitionKey(userId),
-                cancellationToken: cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.ReadItemAsync<CosmosUserModel>(
+                    userId,
+                    new PartitionKey(userId),
+                    cancellationToken: token),
+                cancellationToken);
 
             return Map(response.Resource);
         }
@@ -88,7 +99,9 @@ public sealed class CosmosDbUserRepository : IUserRepository
 
         while (iterator.HasMoreResults)
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
+            var response = await _resiliencePipeline.ExecuteAsync(
+                async token => await iterator.ReadNextAsync(token),
+                cancellationToken);
             results.AddRange(response.Select(Map));
         }
 
@@ -122,7 +135,9 @@ public sealed class CosmosDbUserRepository : IUserRepository
             ApprovedAtUtc = user.ApprovedAtUtc
         };
 
-        await _container.UpsertItemAsync(model, new PartitionKey(user.UserId), cancellationToken: cancellationToken);
+        await _resiliencePipeline.ExecuteAsync(
+            async token => await _container.UpsertItemAsync(model, new PartitionKey(user.UserId), cancellationToken: token),
+            cancellationToken);
     }
 
     private static EnterpriseUserDto Map(CosmosUserModel model)

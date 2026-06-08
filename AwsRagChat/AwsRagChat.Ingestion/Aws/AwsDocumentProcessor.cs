@@ -1,6 +1,8 @@
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Application.Models;
 using AwsRagChat.Ingestion.Services;
+using Polly;
+using Polly.Registry;
 using ApplicationExtractedDocument = AwsRagChat.Application.Models.ExtractedDocument;
 using IngestionExtractedDocument = AwsRagChat.Ingestion.Services.ExtractedDocument;
 
@@ -12,17 +14,20 @@ public sealed class AwsDocumentProcessor : IDocumentProcessor
     private readonly TextractTextExtractionService _textractTextExtractionService;
     private readonly TextractAsyncExtractionService _textractAsyncExtractionService;
     private readonly IStorageProvider _storageProvider;
+    private readonly ResiliencePipeline _resiliencePipeline;
 
     public AwsDocumentProcessor(
         TextExtractionService textExtractionService,
         TextractTextExtractionService textractTextExtractionService,
         TextractAsyncExtractionService textractAsyncExtractionService,
-        IStorageProvider storageProvider)
+        IStorageProvider storageProvider,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
         _textExtractionService = textExtractionService;
         _textractTextExtractionService = textractTextExtractionService;
         _textractAsyncExtractionService = textractAsyncExtractionService;
         _storageProvider = storageProvider;
+        _resiliencePipeline = pipelineProvider.GetPipeline("OcrPipeline");
     }
 
     public async Task<DocumentProcessingResult> ExtractAsync(
@@ -60,9 +65,11 @@ public sealed class AwsDocumentProcessor : IDocumentProcessor
 
             if (_textExtractionService.ShouldFallbackToOcr(request.FileName, extracted))
             {
-                var jobId = await _textractAsyncExtractionService.StartDocumentTextDetectionAsync(
-                    request.BucketOrContainerName,
-                    request.ObjectKey,
+                var jobId = await _resiliencePipeline.ExecuteAsync(
+                    async token => await _textractAsyncExtractionService.StartDocumentTextDetectionAsync(
+                        request.BucketOrContainerName,
+                        request.ObjectKey,
+                        token),
                     cancellationToken);
 
                 return new DocumentProcessingResult
@@ -82,10 +89,12 @@ public sealed class AwsDocumentProcessor : IDocumentProcessor
 
         if (_textractTextExtractionService.CanExtractWithTextract(request.FileName))
         {
-            var extracted = await _textractTextExtractionService.ExtractFromS3Async(
-                request.BucketOrContainerName,
-                request.ObjectKey,
-                request.FileName,
+            var extracted = await _resiliencePipeline.ExecuteAsync(
+                async token => await _textractTextExtractionService.ExtractFromS3Async(
+                    request.BucketOrContainerName,
+                    request.ObjectKey,
+                    request.FileName,
+                    token),
                 cancellationToken);
 
             return new DocumentProcessingResult
@@ -112,8 +121,10 @@ public sealed class AwsDocumentProcessor : IDocumentProcessor
         if (string.IsNullOrWhiteSpace(request.OcrJobId))
             throw new ArgumentException("OCR job ID is required.", nameof(request));
 
-        var extracted = await _textractAsyncExtractionService.GetCompletedDocumentAsync(
-            request.OcrJobId,
+        var extracted = await _resiliencePipeline.ExecuteAsync(
+            async token => await _textractAsyncExtractionService.GetCompletedDocumentAsync(
+                request.OcrJobId,
+                token),
             cancellationToken);
 
         return new DocumentProcessingResult

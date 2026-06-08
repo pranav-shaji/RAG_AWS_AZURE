@@ -6,6 +6,8 @@ using Azure.AI.DocumentIntelligence;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.DependencyInjection;
+using AwsRagChat.Infrastructure.Resilience;
 using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Ingestion.Options;
 using AwsRagChat.Ingestion.Services;
@@ -75,7 +77,13 @@ public static class AzureIngestionComposition
         configuration.GetSection(AzureDocumentProcessingOptions.SectionName).Bind(docProcessingOptions);
         var docProcessingIOptions = Microsoft.Extensions.Options.Options.Create(docProcessingOptions);
 
-        // 2. Instantiate CosmosClient
+        // 2. Setup Resilience Pipeline Provider
+        var resilienceServices = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        resilienceServices.AddCustomResiliencePipelines();
+        var resilienceProvider = resilienceServices.BuildServiceProvider();
+        var pipelineProvider = resilienceProvider.GetRequiredService<Polly.Registry.ResiliencePipelineProvider<string>>();
+
+        // 3. Instantiate CosmosClient
         CosmosClient cosmosClient;
         var cosmosClientOptions = new CosmosClientOptions
         {
@@ -93,24 +101,26 @@ public static class AzureIngestionComposition
             cosmosClient = new CosmosClient(cosmosDbOptions.Endpoint, new DefaultAzureCredential(), cosmosClientOptions);
         }
 
-        // 3. Instantiate other clients and services
-        var storageProvider = new AzureBlobStorageService(storageIOptions);
-        var chunkRepository = new CosmosDbChunkRepository(cosmosClient, cosmosDbIOptions);
-        var documentRepository = new CosmosDbDocumentRepository(cosmosClient, cosmosDbIOptions);
-        var documentStatusService = new CosmosDbDocumentStatusService(cosmosClient, cosmosDbIOptions);
-        var openSearchService = new AzureAiSearchVectorStore(vectorStoreIOptions, Microsoft.Extensions.Logging.Abstractions.NullLogger<AzureAiSearchVectorStore>.Instance);
+        // 4. Instantiate other clients and services
+        var storageProvider = new AzureBlobStorageService(storageIOptions, pipelineProvider);
+        var chunkRepository = new CosmosDbChunkRepository(cosmosClient, cosmosDbIOptions, pipelineProvider);
+        var documentRepository = new CosmosDbDocumentRepository(cosmosClient, cosmosDbIOptions, pipelineProvider);
+        var documentStatusService = new CosmosDbDocumentStatusService(cosmosClient, cosmosDbIOptions, pipelineProvider);
+        var openSearchService = new AzureAiSearchVectorStore(vectorStoreIOptions, Microsoft.Extensions.Logging.Abstractions.NullLogger<AzureAiSearchVectorStore>.Instance, pipelineProvider);
 
         var textExtractionService = new TextExtractionService();
         var documentProcessor = new AzureDocumentProcessor(
             textExtractionService,
             docProcessingIOptions,
-            storageProvider);
+            storageProvider,
+            pipelineProvider);
 
         var chunkingService = new ChunkingService();
         
         var embeddingProvider = new AzureOpenAiEmbeddingService(
             azureOpenAiIOptions,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<AzureOpenAiEmbeddingService>.Instance);
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<AzureOpenAiEmbeddingService>.Instance,
+            pipelineProvider);
 
         var documentIngestionPipeline = new DocumentIngestionPipeline(
             chunkingService,
