@@ -10,23 +10,30 @@ namespace AwsRagChat.Api.Controllers;
 [Route("api/[controller]")]
 public class AuthController : ControllerBase
 {
-    private readonly IAmazonCognitoIdentityProvider _cognito;
     private readonly IUserApprovalService _userApprovalService;
     private readonly IConfiguration _configuration;
 
     public AuthController(
-        IAmazonCognitoIdentityProvider cognito,
         IUserApprovalService userApprovalService,
         IConfiguration configuration)
     {
-        _cognito = cognito;
         _userApprovalService = userApprovalService;
         _configuration = configuration;
     }
 
     [HttpPost("register")]
-    public async Task<IActionResult> Register(RegisterRequest request)
+    public async Task<IActionResult> Register(
+        RegisterRequest request,
+        [FromServices] IAmazonCognitoIdentityProvider cognito)
     {
+        if (string.Equals(_configuration["CloudProvider"], "Azure", StringComparison.OrdinalIgnoreCase))
+        {
+            return StatusCode(StatusCodes.Status501NotImplemented, new
+            {
+                error = "User registration is managed externally via Microsoft Entra ID portal or IT provisioning. API signup endpoint is not supported in Azure mode."
+            });
+        }
+
         if (request is null ||
             string.IsNullOrWhiteSpace(request.Email) ||
             string.IsNullOrWhiteSpace(request.Password))
@@ -50,7 +57,7 @@ public class AuthController : ControllerBase
 
         try
         {
-            var createResponse = await _cognito.AdminCreateUserAsync(
+            var createResponse = await cognito.AdminCreateUserAsync(
                 new AdminCreateUserRequest
                 {
                     UserPoolId = userPoolId,
@@ -76,7 +83,7 @@ public class AuthController : ControllerBase
                     MessageAction = MessageActionType.SUPPRESS
                 });
 
-            await _cognito.AdminSetUserPasswordAsync(
+            await cognito.AdminSetUserPasswordAsync(
                 new AdminSetUserPasswordRequest
                 {
                     UserPoolId = userPoolId,
@@ -85,7 +92,7 @@ public class AuthController : ControllerBase
                     Permanent = true
                 });
 
-            await _cognito.AdminConfirmSignUpAsync(
+            await cognito.AdminConfirmSignUpAsync(
                 new AdminConfirmSignUpRequest
                 {
                     UserPoolId = userPoolId,

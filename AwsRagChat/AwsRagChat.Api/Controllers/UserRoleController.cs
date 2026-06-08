@@ -5,6 +5,7 @@ using AwsRagChat.Application.Models;
 using AwsRagChat.Infrastructure.Options;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 
 namespace AwsRagChat.Api.Controllers;
 
@@ -34,6 +35,10 @@ public sealed class UserRoleController : ControllerBase
         // Read role directly from JWT claims.
         var role =
             User.Claims
+                .Where(x => x.Type == ClaimTypes.Role)
+                .Select(x => x.Value)
+                .FirstOrDefault()
+            ?? User.Claims
                 .Where(x => x.Type == IdentityOptions.GroupsClaimType)
                 .Select(x => x.Value)
                 .FirstOrDefault()
@@ -81,6 +86,10 @@ public sealed class UserRoleController : ControllerBase
 
         var existingRole =
             User.Claims
+                .Where(x => x.Type == ClaimTypes.Role)
+                .Select(x => x.Value)
+                .FirstOrDefault()
+            ?? User.Claims
                 .Where(x => x.Type == IdentityOptions.GroupsClaimType)
                 .Select(x => x.Value)
                 .FirstOrDefault()
