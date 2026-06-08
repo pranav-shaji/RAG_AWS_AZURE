@@ -58,7 +58,7 @@ public sealed class AwsDocumentProcessor : IDocumentProcessor
                 content,
                 cancellationToken);
 
-            if (_textExtractionService.ShouldFallbackToTextract(request.FileName, extracted))
+            if (_textExtractionService.ShouldFallbackToOcr(request.FileName, extracted))
             {
                 var jobId = await _textractAsyncExtractionService.StartDocumentTextDetectionAsync(
                     request.BucketOrContainerName,

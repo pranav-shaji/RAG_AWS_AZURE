@@ -85,7 +85,7 @@ public sealed class AzureDocumentProcessor : IDocumentProcessor
                 cancellationToken);
 
             // 2. Fallback to Azure Document Intelligence if needed (e.g. scanned PDF check)
-            if (_textExtractionService.ShouldFallbackToTextract(request.FileName, extracted))
+            if (_textExtractionService.ShouldFallbackToOcr(request.FileName, extracted))
             {
                 // Reset stream/re-open read stream since direct extraction consumed it
                 var ocrStorageObject = await _storageProvider.OpenReadAsync(

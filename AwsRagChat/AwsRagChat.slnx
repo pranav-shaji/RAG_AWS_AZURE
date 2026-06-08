@@ -4,4 +4,6 @@
   <Project Path="AwsRagChat.Domain/AwsRagChat.Domain.csproj" />
   <Project Path="AwsRagChat.Infrastructure/AwsRagChat.Infrastructure.csproj" />
   <Project Path="AwsRagChat.Ingestion/AwsRagChat.Ingestion.csproj" />
+  <Project Path="AwsRagChat.Ingestion.Aws/AwsRagChat.Ingestion.Aws.csproj" />
+  <Project Path="AwsRagChat.Ingestion.Azure/AwsRagChat.Ingestion.Azure.csproj" />
 </Solution>

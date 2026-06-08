@@ -1,4 +1,4 @@
-﻿{
+{
   "profile": "default",
   "region": "us-east-1",
   "configuration": "Release",
@@ -6,5 +6,5 @@
   "function-runtime": "dotnet8",
   "function-memory-size": 512,
   "function-timeout": 60,
-  "function-handler": "AwsRagChat.Ingestion::AwsRagChat.Ingestion.Handlers.S3DocumentIngestionFunction::FunctionHandler"
+  "function-handler": "AwsRagChat.Ingestion.Aws::AwsRagChat.Ingestion.Handlers.S3DocumentIngestionFunction::FunctionHandler"
 }

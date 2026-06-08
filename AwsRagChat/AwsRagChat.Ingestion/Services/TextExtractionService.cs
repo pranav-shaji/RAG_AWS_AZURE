@@ -22,7 +22,7 @@ public sealed class TextExtractionService
         return DirectExtractionExtensions.Contains(extension);
     }
 
-    public bool ShouldFallbackToTextract(string fileName, ExtractedDocument extractedDocument)
+    public bool ShouldFallbackToOcr(string fileName, ExtractedDocument extractedDocument)
     {
         if (string.IsNullOrWhiteSpace(fileName))
             return false;

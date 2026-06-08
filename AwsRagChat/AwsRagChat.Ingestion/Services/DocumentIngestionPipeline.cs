@@ -116,7 +116,7 @@ public sealed class DocumentIngestionPipeline :
         log?.Invoke(
             $"Generated embeddings. ChunkCount: {chunks.Count}, Dimensions: {(chunks.Count > 0 ? chunks[0].Embedding.Count : 0)}");
 
-        log?.Invoke("Saving chunks to DynamoDB.");
+        log?.Invoke("Persisting chunks to document store.");
 
         await _chunkRepository.SaveChunksAsync(
             chunks,
@@ -129,7 +129,7 @@ public sealed class DocumentIngestionPipeline :
             request.ObjectKey,
             cancellationToken);
 
-        log?.Invoke("Indexing chunks into OpenSearch.");
+        log?.Invoke("Indexing chunks into vector store.");
 
         foreach (var chunk in chunks)
         {
