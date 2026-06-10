@@ -67,31 +67,55 @@ public sealed class CosmosDbChunkRepository : IChunkRepository
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(chunks);
+
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.SaveChunks",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ChunksContainer);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        foreach (var chunk in chunks)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var model = new CosmosChunkModel
+            foreach (var chunk in chunks)
             {
-                Id = chunk.ChunkId,
-                DocumentId = chunk.DocumentId,
-                OwnerUserId = chunk.OwnerUserId,
-                FileName = chunk.FileName,
-                StorageKey = chunk.StorageKey,
-                PageNumber = chunk.PageNumber,
-                Section = chunk.Section ?? string.Empty,
-                Heading = chunk.Heading ?? string.Empty,
-                ChunkOrder = chunk.ChunkOrder,
-                Text = chunk.Text,
-                IsAdminDocument = chunk.IsAdminDocument,
-                AllowedRoles = chunk.AllowedRoles.ToList(),
-                CreatedAtUtc = chunk.CreatedAtUtc,
-                Embedding = chunk.Embedding.ToList()
-            };
+                var model = new CosmosChunkModel
+                {
+                    Id = chunk.ChunkId,
+                    DocumentId = chunk.DocumentId,
+                    OwnerUserId = chunk.OwnerUserId,
+                    FileName = chunk.FileName,
+                    StorageKey = chunk.StorageKey,
+                    PageNumber = chunk.PageNumber,
+                    Section = chunk.Section ?? string.Empty,
+                    Heading = chunk.Heading ?? string.Empty,
+                    ChunkOrder = chunk.ChunkOrder,
+                    Text = chunk.Text,
+                    IsAdminDocument = chunk.IsAdminDocument,
+                    AllowedRoles = chunk.AllowedRoles.ToList(),
+                    CreatedAtUtc = chunk.CreatedAtUtc,
+                    Embedding = chunk.Embedding.ToList()
+                };
 
-            await _resiliencePipeline.ExecuteAsync(
-                async token => await _container.UpsertItemAsync(model, new PartitionKey(chunk.DocumentId), cancellationToken: token),
-                cancellationToken);
+                await _resiliencePipeline.ExecuteAsync(
+                    async token => await _container.UpsertItemAsync(model, new PartitionKey(chunk.DocumentId), cancellationToken: token),
+                    cancellationToken);
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ChunksContainer),
+                new KeyValuePair<string, object?>("operation", "UpsertItems"));
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
         }
     }
 
@@ -106,28 +130,53 @@ public sealed class CosmosDbChunkRepository : IChunkRepository
         if (string.IsNullOrWhiteSpace(documentId))
             throw new ArgumentException("DocumentId is required.", nameof(documentId));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetChunksByDocumentId",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ChunksContainer);
+        activity?.SetTag("document.id", documentId);
+        activity?.SetTag("user.id", ownerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT * FROM c WHERE c.documentId = @documentId AND (c.ownerUserId = @ownerUserId OR c.isAdminDocument = true)")
-            .WithParameter("@documentId", documentId)
-            .WithParameter("@ownerUserId", ownerUserId);
-
-        var iterator = _container.GetItemQueryIterator<CosmosChunkModel>(
-            query,
-            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(documentId) });
-
-        var results = new List<DocumentChunk>();
-        while (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            results.AddRange(response.Select(Map));
-        }
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.documentId = @documentId AND (c.ownerUserId = @ownerUserId OR c.isAdminDocument = true)")
+                .WithParameter("@documentId", documentId)
+                .WithParameter("@ownerUserId", ownerUserId);
 
-        return results
-            .OrderBy(c => c.ChunkOrder)
-            .ToList();
+            var iterator = _container.GetItemQueryIterator<CosmosChunkModel>(
+                query,
+                requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(documentId) });
+
+            var results = new List<DocumentChunk>();
+            while (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                results.AddRange(response.Select(Map));
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ChunksContainer),
+                new KeyValuePair<string, object?>("operation", "Query"));
+
+            return results
+                .OrderBy(c => c.ChunkOrder)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<IReadOnlyList<DocumentChunk>> GetAllChunksAsync(
@@ -137,24 +186,48 @@ public sealed class CosmosDbChunkRepository : IChunkRepository
         if (string.IsNullOrWhiteSpace(ownerUserId))
             throw new ArgumentException("OwnerUserId is required.", nameof(ownerUserId));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetAllChunks",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ChunksContainer);
+        activity?.SetTag("user.id", ownerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        // This is a cross-partition query since partition key is documentId
-        var query = new QueryDefinition("SELECT * FROM c WHERE c.ownerUserId = @ownerUserId OR c.isAdminDocument = true")
-            .WithParameter("@ownerUserId", ownerUserId);
-
-        var iterator = _container.GetItemQueryIterator<CosmosChunkModel>(query);
-        var results = new List<DocumentChunk>();
-
-        while (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            results.AddRange(response.Select(Map));
-        }
+            // This is a cross-partition query since partition key is documentId
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.ownerUserId = @ownerUserId OR c.isAdminDocument = true")
+                .WithParameter("@ownerUserId", ownerUserId);
 
-        return results;
+            var iterator = _container.GetItemQueryIterator<CosmosChunkModel>(query);
+            var results = new List<DocumentChunk>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                results.AddRange(response.Select(Map));
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ChunksContainer),
+                new KeyValuePair<string, object?>("operation", "Query"));
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<IReadOnlyList<DocumentChunk>> GetChunksByDocumentsAsync(
@@ -173,41 +246,65 @@ public sealed class CosmosDbChunkRepository : IChunkRepository
         if (normalizedDocumentIds.Count == 0)
             return Array.Empty<DocumentChunk>();
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetChunksByDocuments",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ChunksContainer);
+        activity?.SetTag("documents.count", normalizedDocumentIds.Count);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var tasks = normalizedDocumentIds.Select(async docId =>
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var query = new QueryDefinition("SELECT * FROM c WHERE c.documentId = @docId")
-                .WithParameter("@docId", docId);
-
-            var iterator = _container.GetItemQueryIterator<CosmosChunkModel>(
-                query,
-                requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(docId) });
-
-            var chunks = new List<DocumentChunk>();
-            while (iterator.HasMoreResults)
+            var tasks = normalizedDocumentIds.Select(async docId =>
             {
-                var response = await _resiliencePipeline.ExecuteAsync(
-                    async token => await iterator.ReadNextAsync(token),
-                    cancellationToken);
-                chunks.AddRange(response.Select(Map));
+                var query = new QueryDefinition("SELECT * FROM c WHERE c.documentId = @docId")
+                    .WithParameter("@docId", docId);
+
+                var iterator = _container.GetItemQueryIterator<CosmosChunkModel>(
+                    query,
+                    requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(docId) });
+
+                var chunks = new List<DocumentChunk>();
+                while (iterator.HasMoreResults)
+                {
+                    var response = await _resiliencePipeline.ExecuteAsync(
+                        async token => await iterator.ReadNextAsync(token),
+                        cancellationToken);
+                    chunks.AddRange(response.Select(Map));
+                }
+                return chunks;
+            }).ToList();
+
+            var chunkGroups = await Task.WhenAll(tasks);
+            var results = chunkGroups
+                .SelectMany(g => g)
+                .OrderBy(c => c.DocumentId, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(c => c.ChunkOrder)
+                .ToList();
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ChunksContainer),
+                new KeyValuePair<string, object?>("operation", "QueryMultiple"));
+
+            if (maxChunks.HasValue && maxChunks.Value > 0)
+            {
+                return results.Take(maxChunks.Value).ToList();
             }
-            return chunks;
-        }).ToList();
 
-        var chunkGroups = await Task.WhenAll(tasks);
-        var results = chunkGroups
-            .SelectMany(g => g)
-            .OrderBy(c => c.DocumentId, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(c => c.ChunkOrder)
-            .ToList();
-
-        if (maxChunks.HasValue && maxChunks.Value > 0)
-        {
-            return results.Take(maxChunks.Value).ToList();
+            return results;
         }
-
-        return results;
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     private static DocumentChunk Map(CosmosChunkModel model)

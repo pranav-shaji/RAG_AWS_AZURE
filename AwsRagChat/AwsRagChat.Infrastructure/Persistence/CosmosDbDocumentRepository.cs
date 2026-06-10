@@ -70,6 +70,14 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
         string fileHash,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.FindByOwnerAndHash",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("user.id", ownerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
         if (string.IsNullOrWhiteSpace(ownerUserId))
@@ -78,36 +86,66 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
         if (string.IsNullOrWhiteSpace(fileHash))
             throw new ArgumentException("FileHash is required.", nameof(fileHash));
 
-        var query = new QueryDefinition("SELECT * FROM c WHERE c.ownerUserId = @ownerUserId AND c.fileHash = @fileHash")
-            .WithParameter("@ownerUserId", ownerUserId)
-            .WithParameter("@fileHash", fileHash);
-
-        var iterator = _container.GetItemQueryIterator<CosmosDocumentModel>(query);
-
-        if (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            var item = response.FirstOrDefault();
-            if (item != null)
-            {
-                return Map(item);
-            }
-        }
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.ownerUserId = @ownerUserId AND c.fileHash = @fileHash")
+                .WithParameter("@ownerUserId", ownerUserId)
+                .WithParameter("@fileHash", fileHash);
 
-        return null;
+            var iterator = _container.GetItemQueryIterator<CosmosDocumentModel>(query);
+
+            if (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                var item = response.FirstOrDefault();
+                if (item != null)
+                {
+                    stopwatch.Stop();
+                    AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                        stopwatch.ElapsedMilliseconds,
+                        new KeyValuePair<string, object?>("database", "CosmosDb"),
+                        new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                        new KeyValuePair<string, object?>("operation", "Query"));
+                    return Map(item);
+                }
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "Query"));
+            return null;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<ExistingDocumentRecord?> GetDocumentByIdAsync(
         string documentId,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetDocumentById",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("document.id", documentId);
+
         await EnsureInitializedAsync(cancellationToken);
 
         if (string.IsNullOrWhiteSpace(documentId))
             throw new ArgumentException("DocumentId is required.", nameof(documentId));
 
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var response = await _resiliencePipeline.ExecuteAsync(
@@ -117,11 +155,29 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
                     cancellationToken: token),
                 cancellationToken);
 
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "ReadItem"));
+
             return Map(response.Resource);
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "ReadItem"));
             return null;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
         }
     }
 
@@ -136,6 +192,15 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
         IReadOnlyList<string> allowedRoles,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.CreateUploadRecord",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("document.id", documentId);
+        activity?.SetTag("user.id", ownerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
         var now = DateTime.UtcNow;
@@ -155,15 +220,39 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
             AllowedRoles = allowedRoles.ToList()
         };
 
-        await _resiliencePipeline.ExecuteAsync(
-            async token => await _container.UpsertItemAsync(model, new PartitionKey(documentId), cancellationToken: token),
-            cancellationToken);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.UpsertItemAsync(model, new PartitionKey(documentId), cancellationToken: token),
+                cancellationToken);
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "UpsertItem"));
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<int> GetDocumentCountAsync(
         string ownerUserId,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetDocumentCount",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("user.id", ownerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
         var query = new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.ownerUserId = @ownerUserId")
@@ -176,23 +265,47 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
         string ownerUserId,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetDocumentsByUser",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("user.id", ownerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT * FROM c WHERE c.ownerUserId = @ownerUserId")
-            .WithParameter("@ownerUserId", ownerUserId);
-
-        var iterator = _container.GetItemQueryIterator<CosmosDocumentModel>(query);
-        var results = new List<ExistingDocumentRecord>();
-
-        while (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            results.AddRange(response.Select(Map));
-        }
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.ownerUserId = @ownerUserId")
+                .WithParameter("@ownerUserId", ownerUserId);
 
-        return results;
+            var iterator = _container.GetItemQueryIterator<CosmosDocumentModel>(query);
+            var results = new List<ExistingDocumentRecord>();
+
+            while (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                results.AddRange(response.Select(Map));
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "Query"));
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task UpdateStatusAsync(
@@ -200,6 +313,15 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
         string status,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.UpdateStatus",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("document.id", documentId);
+        activity?.SetTag("status", status);
+
         await EnsureInitializedAsync(cancellationToken);
 
         var patchOperations = new[]
@@ -208,13 +330,29 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
             PatchOperation.Set("/updatedAtUtc", DateTime.UtcNow)
         };
 
-        await _resiliencePipeline.ExecuteAsync(
-            async token => await _container.PatchItemAsync<CosmosDocumentModel>(
-                documentId,
-                new PartitionKey(documentId),
-                patchOperations,
-                cancellationToken: token),
-            cancellationToken);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.PatchItemAsync<CosmosDocumentModel>(
+                    documentId,
+                    new PartitionKey(documentId),
+                    patchOperations,
+                    cancellationToken: token),
+                cancellationToken);
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "PatchItem"));
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task MarkIndexedAsync(
@@ -223,6 +361,14 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
         int pageCount,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.MarkIndexed",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("document.id", documentId);
+
         await EnsureInitializedAsync(cancellationToken);
 
         var patchOperations = new[]
@@ -233,19 +379,43 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
             PatchOperation.Set("/updatedAtUtc", DateTime.UtcNow)
         };
 
-        await _resiliencePipeline.ExecuteAsync(
-            async token => await _container.PatchItemAsync<CosmosDocumentModel>(
-                documentId,
-                new PartitionKey(documentId),
-                patchOperations,
-                cancellationToken: token),
-            cancellationToken);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.PatchItemAsync<CosmosDocumentModel>(
+                    documentId,
+                    new PartitionKey(documentId),
+                    patchOperations,
+                    cancellationToken: token),
+                cancellationToken);
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "PatchItem"));
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task MarkFailedAsync(
         string documentId,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.MarkFailed",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("document.id", documentId);
+
         await EnsureInitializedAsync(cancellationToken);
 
         var patchOperations = new[]
@@ -254,36 +424,75 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
             PatchOperation.Set("/updatedAtUtc", DateTime.UtcNow)
         };
 
-        await _resiliencePipeline.ExecuteAsync(
-            async token => await _container.PatchItemAsync<CosmosDocumentModel>(
-                documentId,
-                new PartitionKey(documentId),
-                patchOperations,
-                cancellationToken: token),
-            cancellationToken);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.PatchItemAsync<CosmosDocumentModel>(
+                    documentId,
+                    new PartitionKey(documentId),
+                    patchOperations,
+                    cancellationToken: token),
+                cancellationToken);
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "PatchItem"));
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<List<ExistingDocumentRecord>> GetRecentDocumentsAsync(
         int take = 50,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetRecentDocuments",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT * FROM c ORDER BY c.updatedAtUtc DESC OFFSET 0 LIMIT @take")
-            .WithParameter("@take", take);
-
-        var iterator = _container.GetItemQueryIterator<CosmosDocumentModel>(query);
-        var results = new List<ExistingDocumentRecord>();
-
-        if (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            results.AddRange(response.Select(Map));
-        }
+            var query = new QueryDefinition("SELECT * FROM c ORDER BY c.updatedAtUtc DESC OFFSET 0 LIMIT @take")
+                .WithParameter("@take", take);
 
-        return results;
+            var iterator = _container.GetItemQueryIterator<CosmosDocumentModel>(query);
+            var results = new List<ExistingDocumentRecord>();
+
+            if (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                results.AddRange(response.Select(Map));
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "Query"));
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<PagedResult<ExistingDocumentRecord>> GetDocumentMetadataPageAsync(
@@ -291,49 +500,110 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
         string? nextToken = null,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetDocumentMetadataPage",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT * FROM c ORDER BY c.updatedAtUtc DESC");
-        var iterator = _container.GetItemQueryIterator<CosmosDocumentModel>(
-            query,
-            continuationToken: nextToken,
-            requestOptions: new QueryRequestOptions { MaxItemCount = pageSize });
-
-        if (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            return new PagedResult<ExistingDocumentRecord>
-            {
-                Items = response.Select(Map).ToList(),
-                NextToken = response.ContinuationToken
-            };
-        }
+            var query = new QueryDefinition("SELECT * FROM c ORDER BY c.updatedAtUtc DESC");
+            var iterator = _container.GetItemQueryIterator<CosmosDocumentModel>(
+                query,
+                continuationToken: nextToken,
+                requestOptions: new QueryRequestOptions { MaxItemCount = pageSize });
 
-        return new PagedResult<ExistingDocumentRecord>();
+            if (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+
+                stopwatch.Stop();
+                AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                    stopwatch.ElapsedMilliseconds,
+                    new KeyValuePair<string, object?>("database", "CosmosDb"),
+                    new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                    new KeyValuePair<string, object?>("operation", "QueryPaged"));
+
+                return new PagedResult<ExistingDocumentRecord>
+                {
+                    Items = response.Select(Map).ToList(),
+                    NextToken = response.ContinuationToken
+                };
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "QueryPaged"));
+
+            return new PagedResult<ExistingDocumentRecord>();
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<DocumentStatsSnapshot> GetDocumentStatsSnapshotAsync(
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetDocumentStatsSnapshot",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var snapshot = new DocumentStatsSnapshot();
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var snapshot = new DocumentStatsSnapshot();
 
-        snapshot.TotalDocuments = await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c"), cancellationToken);
-        snapshot.IndexedDocuments = await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.status = 'INDEXED'"), cancellationToken);
-        snapshot.FailedDocuments = await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.status = 'FAILED'"), cancellationToken);
-        snapshot.UploadedDocuments = await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.status = 'UPLOADED'"), cancellationToken);
-        snapshot.TotalChunks = await GetScalarAsync<long>(new QueryDefinition("SELECT VALUE SUM(c.chunkCount) FROM c"), cancellationToken);
-        snapshot.TotalPages = await GetScalarAsync<long>(new QueryDefinition("SELECT VALUE SUM(c.pageCount) FROM c"), cancellationToken);
+            snapshot.TotalDocuments = await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c"), cancellationToken);
+            snapshot.IndexedDocuments = await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.status = 'INDEXED'"), cancellationToken);
+            snapshot.FailedDocuments = await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.status = 'FAILED'"), cancellationToken);
+            snapshot.UploadedDocuments = await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.status = 'UPLOADED'"), cancellationToken);
+            snapshot.TotalChunks = await GetScalarAsync<long>(new QueryDefinition("SELECT VALUE SUM(c.chunkCount) FROM c"), cancellationToken);
+            snapshot.TotalPages = await GetScalarAsync<long>(new QueryDefinition("SELECT VALUE SUM(c.pageCount) FROM c"), cancellationToken);
 
-        return snapshot;
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "GetStats"));
+
+            return snapshot;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<int> GetTotalDocumentCountAsync(
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetTotalDocumentCount",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+
         await EnsureInitializedAsync(cancellationToken);
         return await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c"), cancellationToken);
     }
@@ -342,6 +612,14 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
         string status,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetDocumentCountByStatus",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("status", status);
+
         await EnsureInitializedAsync(cancellationToken);
 
         var query = new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.status = @status")
@@ -353,6 +631,13 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
     public async Task<long> GetTotalChunkCountAsync(
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetTotalChunkCount",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+
         await EnsureInitializedAsync(cancellationToken);
         return await GetScalarAsync<long>(new QueryDefinition("SELECT VALUE SUM(c.chunkCount) FROM c"), cancellationToken);
     }
@@ -360,6 +645,13 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
     public async Task<long> GetTotalPageCountAsync(
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetTotalPageCount",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+
         await EnsureInitializedAsync(cancellationToken);
         return await GetScalarAsync<long>(new QueryDefinition("SELECT VALUE SUM(c.pageCount) FROM c"), cancellationToken);
     }
@@ -367,19 +659,42 @@ public sealed class CosmosDbDocumentRepository : IDocumentRepository
     public async Task<IReadOnlyList<ExistingDocumentRecord>> GetAdminDocumentsAsync(
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetAdminDocuments",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT * FROM c WHERE c.isAdminDocument = true");
-        var iterator = _container.GetItemQueryIterator<CosmosDocumentModel>(query);
-        var results = new List<ExistingDocumentRecord>();
-
-        while (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await iterator.ReadNextAsync(cancellationToken);
-            results.AddRange(response.Select(Map));
-        }
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.isAdminDocument = true");
+            var iterator = _container.GetItemQueryIterator<CosmosDocumentModel>(query);
+            var results = new List<ExistingDocumentRecord>();
 
-        return results;
+            while (iterator.HasMoreResults)
+            {
+                var response = await iterator.ReadNextAsync(cancellationToken);
+                results.AddRange(response.Select(Map));
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "Query"));
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     private async Task<T> GetScalarAsync<T>(QueryDefinition queryDefinition, CancellationToken cancellationToken)

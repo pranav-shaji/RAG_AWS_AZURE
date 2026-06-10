@@ -67,6 +67,16 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(session);
+
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.UpsertSession",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ConversationsContainer);
+        activity?.SetTag("session.id", session.SessionId);
+        activity?.SetTag("user.id", session.OwnerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
         var model = new CosmosSessionModel
@@ -84,9 +94,25 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
             IsArchived = session.IsArchived
         };
 
-        await _resiliencePipeline.ExecuteAsync(
-            async token => await _container.UpsertItemAsync(model, new PartitionKey(session.OwnerUserId), cancellationToken: token),
-            cancellationToken);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.UpsertItemAsync(model, new PartitionKey(session.OwnerUserId), cancellationToken: token),
+                cancellationToken);
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ConversationsContainer),
+                new KeyValuePair<string, object?>("operation", "UpsertSession"));
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<ConversationSession?> GetSessionAsync(
@@ -100,8 +126,18 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         if (string.IsNullOrWhiteSpace(sessionId))
             throw new ArgumentException("SessionId is required.", nameof(sessionId));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetSession",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ConversationsContainer);
+        activity?.SetTag("session.id", sessionId);
+        activity?.SetTag("user.id", ownerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var response = await _resiliencePipeline.ExecuteAsync(
@@ -111,11 +147,29 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
                     cancellationToken: token),
                 cancellationToken);
 
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ConversationsContainer),
+                new KeyValuePair<string, object?>("operation", "ReadSession"));
+
             return MapSession(response.Resource);
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ConversationsContainer),
+                new KeyValuePair<string, object?>("operation", "ReadSession"));
             return null;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
         }
     }
 
@@ -126,27 +180,51 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         if (string.IsNullOrWhiteSpace(ownerUserId))
             throw new ArgumentException("OwnerUserId is required.", nameof(ownerUserId));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetSessions",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ConversationsContainer);
+        activity?.SetTag("user.id", ownerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT * FROM c WHERE c.ownerUserId = @ownerUserId AND c.entityType = 'SESSION'")
-            .WithParameter("@ownerUserId", ownerUserId);
-
-        var iterator = _container.GetItemQueryIterator<CosmosSessionModel>(
-            query,
-            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(ownerUserId) });
-
-        var results = new List<ConversationSession>();
-        while (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            results.AddRange(response.Select(MapSession));
-        }
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.ownerUserId = @ownerUserId AND c.entityType = 'SESSION'")
+                .WithParameter("@ownerUserId", ownerUserId);
 
-        return results
-            .OrderByDescending(x => x.LastMessageAtUtc)
-            .ToList();
+            var iterator = _container.GetItemQueryIterator<CosmosSessionModel>(
+                query,
+                requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(ownerUserId) });
+
+            var results = new List<ConversationSession>();
+            while (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                results.AddRange(response.Select(MapSession));
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ConversationsContainer),
+                new KeyValuePair<string, object?>("operation", "QuerySessions"));
+
+            return results
+                .OrderByDescending(x => x.LastMessageAtUtc)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task AddMessageAsync(
@@ -154,6 +232,17 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(message);
+
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.AddMessage",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ConversationsContainer);
+        activity?.SetTag("session.id", message.SessionId);
+        activity?.SetTag("message.id", message.MessageId);
+        activity?.SetTag("user.id", message.OwnerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
         var model = new CosmosMessageModel
@@ -173,9 +262,25 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
             Citations = message.Citations.Select(MapCitation).ToList()
         };
 
-        await _resiliencePipeline.ExecuteAsync(
-            async token => await _container.UpsertItemAsync(model, new PartitionKey(message.OwnerUserId), cancellationToken: token),
-            cancellationToken);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.UpsertItemAsync(model, new PartitionKey(message.OwnerUserId), cancellationToken: token),
+                cancellationToken);
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ConversationsContainer),
+                new KeyValuePair<string, object?>("operation", "AddMessage"));
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<IReadOnlyList<ConversationMessage>> GetMessagesAsync(
@@ -193,29 +298,54 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         if (take <= 0)
             throw new ArgumentOutOfRangeException(nameof(take), "Take must be greater than zero.");
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetMessages",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ConversationsContainer);
+        activity?.SetTag("session.id", sessionId);
+        activity?.SetTag("user.id", ownerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT * FROM c WHERE c.ownerUserId = @ownerUserId AND c.sessionId = @sessionId AND c.entityType = 'MESSAGE' ORDER BY c.createdAtUtc DESC OFFSET 0 LIMIT @take")
-            .WithParameter("@ownerUserId", ownerUserId)
-            .WithParameter("@sessionId", sessionId)
-            .WithParameter("@take", take);
-
-        var iterator = _container.GetItemQueryIterator<CosmosMessageModel>(
-            query,
-            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(ownerUserId) });
-
-        var results = new List<ConversationMessage>();
-        while (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            results.AddRange(response.Select(MapMessage));
-        }
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.ownerUserId = @ownerUserId AND c.sessionId = @sessionId AND c.entityType = 'MESSAGE' ORDER BY c.createdAtUtc DESC OFFSET 0 LIMIT @take")
+                .WithParameter("@ownerUserId", ownerUserId)
+                .WithParameter("@sessionId", sessionId)
+                .WithParameter("@take", take);
 
-        return results
-            .OrderBy(x => x.CreatedAtUtc)
-            .ToList();
+            var iterator = _container.GetItemQueryIterator<CosmosMessageModel>(
+                query,
+                requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(ownerUserId) });
+
+            var results = new List<ConversationMessage>();
+            while (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                results.AddRange(response.Select(MapMessage));
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ConversationsContainer),
+                new KeyValuePair<string, object?>("operation", "QueryMessages"));
+
+            return results
+                .OrderBy(x => x.CreatedAtUtc)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task DeleteSessionAsync(
@@ -229,31 +359,56 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         if (string.IsNullOrWhiteSpace(sessionId))
             throw new ArgumentException("SessionId is required.", nameof(sessionId));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.DeleteSession",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ConversationsContainer);
+        activity?.SetTag("session.id", sessionId);
+        activity?.SetTag("user.id", ownerUserId);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT c.id FROM c WHERE c.ownerUserId = @ownerUserId AND (c.id = @sessionKey OR (c.sessionId = @sessionId AND c.entityType = 'MESSAGE'))")
-            .WithParameter("@ownerUserId", ownerUserId)
-            .WithParameter("@sessionKey", $"session_{sessionId}")
-            .WithParameter("@sessionId", sessionId);
-
-        var iterator = _container.GetItemQueryIterator<IdProjection>(
-            query,
-            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(ownerUserId) });
-
-        var idsToDelete = new List<string>();
-        while (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            idsToDelete.AddRange(response.Select(x => x.Id));
+            var query = new QueryDefinition("SELECT c.id FROM c WHERE c.ownerUserId = @ownerUserId AND (c.id = @sessionKey OR (c.sessionId = @sessionId AND c.entityType = 'MESSAGE'))")
+                .WithParameter("@ownerUserId", ownerUserId)
+                .WithParameter("@sessionKey", $"session_{sessionId}")
+                .WithParameter("@sessionId", sessionId);
+
+            var iterator = _container.GetItemQueryIterator<IdProjection>(
+                query,
+                requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(ownerUserId) });
+
+            var idsToDelete = new List<string>();
+            while (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                idsToDelete.AddRange(response.Select(x => x.Id));
+            }
+
+            foreach (var id in idsToDelete)
+            {
+                await _resiliencePipeline.ExecuteAsync(
+                    async token => await _container.DeleteItemAsync<object>(id, new PartitionKey(ownerUserId), cancellationToken: token),
+                    cancellationToken);
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ConversationsContainer),
+                new KeyValuePair<string, object?>("operation", "DeleteSession"));
         }
-
-        foreach (var id in idsToDelete)
+        catch (Exception ex)
         {
-            await _resiliencePipeline.ExecuteAsync(
-                async token => await _container.DeleteItemAsync<object>(id, new PartitionKey(ownerUserId), cancellationToken: token),
-                cancellationToken);
+            activity?.SetTag("error", ex.Message);
+            throw;
         }
     }
 
@@ -261,28 +416,58 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
         int take = 50,
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetRecentSessions",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ConversationsContainer);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT * FROM c WHERE c.entityType = 'SESSION' ORDER BY c.lastMessageAtUtc DESC OFFSET 0 LIMIT @take")
-            .WithParameter("@take", take);
-
-        var iterator = _container.GetItemQueryIterator<CosmosSessionModel>(query);
-        var results = new List<ConversationSession>();
-
-        if (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            results.AddRange(response.Select(MapSession));
-        }
+            var query = new QueryDefinition("SELECT * FROM c WHERE c.entityType = 'SESSION' ORDER BY c.lastMessageAtUtc DESC OFFSET 0 LIMIT @take")
+                .WithParameter("@take", take);
 
-        return results;
+            var iterator = _container.GetItemQueryIterator<CosmosSessionModel>(query);
+            var results = new List<ConversationSession>();
+
+            if (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                results.AddRange(response.Select(MapSession));
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.ConversationsContainer),
+                new KeyValuePair<string, object?>("operation", "QueryRecentSessions"));
+
+            return results;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<int> GetTotalSessionCountAsync(
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetTotalSessionCount",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ConversationsContainer);
+
         await EnsureInitializedAsync(cancellationToken);
         return await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.entityType = 'SESSION'"), cancellationToken);
     }
@@ -290,6 +475,13 @@ public sealed class CosmosDbConversationRepository : IConversationRepository
     public async Task<int> GetTotalMessageCountAsync(
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetTotalMessageCount",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.ConversationsContainer);
+
         await EnsureInitializedAsync(cancellationToken);
         return await GetScalarAsync<int>(new QueryDefinition("SELECT VALUE COUNT(1) FROM c WHERE c.entityType = 'MESSAGE'"), cancellationToken);
     }

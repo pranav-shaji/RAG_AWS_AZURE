@@ -69,8 +69,17 @@ public sealed class CosmosDbUserRepository : IUserRepository
         if (string.IsNullOrWhiteSpace(userId))
             throw new ArgumentException("UserId is required.", nameof(userId));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetByUserId",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.UsersContainer);
+        activity?.SetTag("user.id", userId);
+
         await EnsureInitializedAsync(cancellationToken);
 
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var response = await _resiliencePipeline.ExecuteAsync(
@@ -80,35 +89,76 @@ public sealed class CosmosDbUserRepository : IUserRepository
                     cancellationToken: token),
                 cancellationToken);
 
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.UsersContainer),
+                new KeyValuePair<string, object?>("operation", "ReadItem"));
+
             return Map(response.Resource);
         }
         catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.UsersContainer),
+                new KeyValuePair<string, object?>("operation", "ReadItem"));
             return null;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
         }
     }
 
     public async Task<IReadOnlyList<EnterpriseUserDto>> GetAllAsync(
         CancellationToken cancellationToken = default)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetAllUsers",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.UsersContainer);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT * FROM c");
-        var iterator = _container.GetItemQueryIterator<CosmosUserModel>(query);
-        var results = new List<EnterpriseUserDto>();
-
-        while (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            results.AddRange(response.Select(Map));
-        }
+            var query = new QueryDefinition("SELECT * FROM c");
+            var iterator = _container.GetItemQueryIterator<CosmosUserModel>(query);
+            var results = new List<EnterpriseUserDto>();
 
-        return results
-            .OrderBy(user => user.ApprovalStatus)
-            .ThenByDescending(user => user.CreatedAtUtc)
-            .ToList();
+            while (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                results.AddRange(response.Select(Map));
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.UsersContainer),
+                new KeyValuePair<string, object?>("operation", "Query"));
+
+            return results
+                .OrderBy(user => user.ApprovalStatus)
+                .ThenByDescending(user => user.CreatedAtUtc)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task UpsertAsync(
@@ -117,6 +167,14 @@ public sealed class CosmosDbUserRepository : IUserRepository
     {
         if (string.IsNullOrWhiteSpace(user.UserId))
             throw new ArgumentException("UserId is required.", nameof(user.UserId));
+
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.UpsertUser",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.UsersContainer);
+        activity?.SetTag("user.id", user.UserId);
 
         await EnsureInitializedAsync(cancellationToken);
 
@@ -135,9 +193,25 @@ public sealed class CosmosDbUserRepository : IUserRepository
             ApprovedAtUtc = user.ApprovedAtUtc
         };
 
-        await _resiliencePipeline.ExecuteAsync(
-            async token => await _container.UpsertItemAsync(model, new PartitionKey(user.UserId), cancellationToken: token),
-            cancellationToken);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await _resiliencePipeline.ExecuteAsync(
+                async token => await _container.UpsertItemAsync(model, new PartitionKey(user.UserId), cancellationToken: token),
+                cancellationToken);
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.UsersContainer),
+                new KeyValuePair<string, object?>("operation", "UpsertItem"));
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     private static EnterpriseUserDto Map(CosmosUserModel model)

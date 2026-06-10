@@ -235,24 +235,49 @@ public sealed class CosmosDbDocumentStatusService : IDocumentStatusService
         if (string.IsNullOrWhiteSpace(documentId))
             throw new ArgumentException("DocumentId is required.", nameof(documentId));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetIsAdminDocument",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("document.id", documentId);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT VALUE c.isAdminDocument FROM c WHERE c.id = @documentId")
-            .WithParameter("@documentId", documentId);
-
-        var iterator = _container.GetItemQueryIterator<bool>(
-            query,
-            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(documentId) });
-
-        if (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            return response.FirstOrDefault();
-        }
+            var query = new QueryDefinition("SELECT VALUE c.isAdminDocument FROM c WHERE c.id = @documentId")
+                .WithParameter("@documentId", documentId);
 
-        return false;
+            var iterator = _container.GetItemQueryIterator<bool>(
+                query,
+                requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(documentId) });
+
+            bool result = false;
+            if (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                result = response.FirstOrDefault();
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "GetIsAdminDocument"));
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     public async Task<List<string>> GetAllowedRolesAsync(
@@ -262,24 +287,49 @@ public sealed class CosmosDbDocumentStatusService : IDocumentStatusService
         if (string.IsNullOrWhiteSpace(documentId))
             throw new ArgumentException("DocumentId is required.", nameof(documentId));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "CosmosDb.GetAllowedRoles",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("document.id", documentId);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        var query = new QueryDefinition("SELECT VALUE c.allowedRoles FROM c WHERE c.id = @documentId")
-            .WithParameter("@documentId", documentId);
-
-        var iterator = _container.GetItemQueryIterator<List<string>>(
-            query,
-            requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(documentId) });
-
-        if (iterator.HasMoreResults)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await iterator.ReadNextAsync(token),
-                cancellationToken);
-            return response.FirstOrDefault() ?? [];
-        }
+            var query = new QueryDefinition("SELECT VALUE c.allowedRoles FROM c WHERE c.id = @documentId")
+                .WithParameter("@documentId", documentId);
 
-        return [];
+            var iterator = _container.GetItemQueryIterator<List<string>>(
+                query,
+                requestOptions: new QueryRequestOptions { PartitionKey = new PartitionKey(documentId) });
+
+            List<string> result = [];
+            if (iterator.HasMoreResults)
+            {
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await iterator.ReadNextAsync(token),
+                    cancellationToken);
+                result = response.FirstOrDefault() ?? [];
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", "GetAllowedRoles"));
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
+        }
     }
 
     private async Task UpdateStatusAsync(
@@ -303,78 +353,104 @@ public sealed class CosmosDbDocumentStatusService : IDocumentStatusService
         if (string.IsNullOrWhiteSpace(status))
             throw new ArgumentException("Status is required.", nameof(status));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            $"CosmosDb.UpdateStatus.{status}",
+            System.Diagnostics.ActivityKind.Internal);
+        activity?.SetTag("db.system", "cosmosdb");
+        activity?.SetTag("db.name", _options.DatabaseName);
+        activity?.SetTag("db.container", _options.DocumentsContainer);
+        activity?.SetTag("document.id", documentId);
+        activity?.SetTag("user.id", ownerUserId);
+        activity?.SetTag("document.status", status);
+
         await EnsureInitializedAsync(cancellationToken);
 
-        CosmosDocumentModel? existing = null;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            var response = await _resiliencePipeline.ExecuteAsync(
-                async token => await _container.ReadItemAsync<CosmosDocumentModel>(
-                    documentId,
-                    new PartitionKey(documentId),
-                    cancellationToken: token),
-                cancellationToken);
-            existing = response.Resource;
-        }
-        catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            // document does not exist yet
-        }
-
-        if (existing == null)
-        {
-            var now = DateTime.UtcNow;
-            var model = new CosmosDocumentModel
+            CosmosDocumentModel? existing = null;
+            try
             {
-                Id = documentId,
-                OwnerUserId = ownerUserId,
-                FileName = fileName,
-                StorageKey = storageKey,
-                Status = status,
-                TextractJobId = textractJobId ?? string.Empty,
-                Message = message ?? string.Empty,
-                ChunkCount = chunkCount ?? 0,
-                PageCount = pageCount ?? 0,
-                CreatedAtUtc = now,
-                UpdatedAtUtc = now,
-                IsAdminDocument = false,
-                AllowedRoles = []
-            };
-
-            await _resiliencePipeline.ExecuteAsync(
-                async token => await _container.CreateItemAsync(model, new PartitionKey(documentId), cancellationToken: token),
-                cancellationToken);
-        }
-        else
-        {
-            var patches = new List<PatchOperation>
+                var response = await _resiliencePipeline.ExecuteAsync(
+                    async token => await _container.ReadItemAsync<CosmosDocumentModel>(
+                        documentId,
+                        new PartitionKey(documentId),
+                        cancellationToken: token),
+                    cancellationToken);
+                existing = response.Resource;
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
-                PatchOperation.Set("/status", status),
-                PatchOperation.Set("/ownerUserId", ownerUserId),
-                PatchOperation.Set("/fileName", fileName),
-                PatchOperation.Set("/storageKey", storageKey),
-                PatchOperation.Set("/updatedAtUtc", DateTime.UtcNow)
-            };
+                // document does not exist yet
+            }
 
-            if (textractJobId != null)
-                patches.Add(PatchOperation.Set("/textractJobId", textractJobId));
+            if (existing == null)
+            {
+                var now = DateTime.UtcNow;
+                var model = new CosmosDocumentModel
+                {
+                    Id = documentId,
+                    OwnerUserId = ownerUserId,
+                    FileName = fileName,
+                    StorageKey = storageKey,
+                    Status = status,
+                    TextractJobId = textractJobId ?? string.Empty,
+                    Message = message ?? string.Empty,
+                    ChunkCount = chunkCount ?? 0,
+                    PageCount = pageCount ?? 0,
+                    CreatedAtUtc = now,
+                    UpdatedAtUtc = now,
+                    IsAdminDocument = false,
+                    AllowedRoles = []
+                };
 
-            if (message != null)
-                patches.Add(PatchOperation.Set("/message", message));
+                await _resiliencePipeline.ExecuteAsync(
+                    async token => await _container.CreateItemAsync(model, new PartitionKey(documentId), cancellationToken: token),
+                    cancellationToken);
+            }
+            else
+            {
+                var patches = new List<PatchOperation>
+                {
+                    PatchOperation.Set("/status", status),
+                    PatchOperation.Set("/ownerUserId", ownerUserId),
+                    PatchOperation.Set("/fileName", fileName),
+                    PatchOperation.Set("/storageKey", storageKey),
+                    PatchOperation.Set("/updatedAtUtc", DateTime.UtcNow)
+                };
 
-            if (chunkCount.HasValue)
-                patches.Add(PatchOperation.Set("/chunkCount", chunkCount.Value));
+                if (textractJobId != null)
+                    patches.Add(PatchOperation.Set("/textractJobId", textractJobId));
 
-            if (pageCount.HasValue)
-                patches.Add(PatchOperation.Set("/pageCount", pageCount.Value));
+                if (message != null)
+                    patches.Add(PatchOperation.Set("/message", message));
 
-            await _resiliencePipeline.ExecuteAsync(
-                async token => await _container.PatchItemAsync<CosmosDocumentModel>(
-                    documentId,
-                    new PartitionKey(documentId),
-                    patches,
-                    cancellationToken: token),
-                cancellationToken);
+                if (chunkCount.HasValue)
+                    patches.Add(PatchOperation.Set("/chunkCount", chunkCount.Value));
+
+                if (pageCount.HasValue)
+                    patches.Add(PatchOperation.Set("/pageCount", pageCount.Value));
+
+                await _resiliencePipeline.ExecuteAsync(
+                    async token => await _container.PatchItemAsync<CosmosDocumentModel>(
+                        documentId,
+                        new PartitionKey(documentId),
+                        patches,
+                        cancellationToken: token),
+                    cancellationToken);
+            }
+
+            stopwatch.Stop();
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+                stopwatch.ElapsedMilliseconds,
+                new KeyValuePair<string, object?>("database", "CosmosDb"),
+                new KeyValuePair<string, object?>("container", _options.DocumentsContainer),
+                new KeyValuePair<string, object?>("operation", $"UpdateStatus.{status}"));
+        }
+        catch (Exception ex)
+        {
+            activity?.SetTag("error", ex.Message);
+            throw;
         }
     }
 

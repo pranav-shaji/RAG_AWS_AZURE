@@ -58,6 +58,7 @@ var host = new HostBuilder()
                 .WithTracing(tracing =>
                 {
                     tracing.AddSource("AwsRagChat")
+                           .AddHttpClientInstrumentation()
                            .AddAzureMonitorTraceExporter(o => o.ConnectionString = appInsightsConnectionString);
                 })
                 .WithMetrics(metrics =>

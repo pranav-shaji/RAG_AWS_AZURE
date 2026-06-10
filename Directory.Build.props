@@ -2,6 +2,7 @@
   <PropertyGroup>
     <DefaultItemExcludes>$(DefaultItemExcludes);**/artifacts/**;**/bin/**;**/obj/**</DefaultItemExcludes>
     <DefaultItemExcludesInProjectFolder>$(DefaultItemExcludesInProjectFolder);**/artifacts/**;**/bin/**;**/obj/**</DefaultItemExcludesInProjectFolder>
+    <NoWarn>$(NoWarn);NU1902</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
