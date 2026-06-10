@@ -38,6 +38,12 @@ public sealed class BedrockEmbeddingService : IEmbeddingProvider
         if (string.IsNullOrWhiteSpace(text))
             throw new ArgumentException("Text is required for embedding.", nameof(text));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "Bedrock.GenerateEmbedding",
+            ActivityKind.Internal);
+        activity?.SetTag("llm.model", _bedrockOptions.EmbeddingModelId);
+        activity?.SetTag("text.length", text.Length);
+
         var payload = new
         {
             inputText = text
@@ -82,6 +88,14 @@ public sealed class BedrockEmbeddingService : IEmbeddingProvider
 
         if (embedding.Count == 0)
             throw new InvalidOperationException("Bedrock returned an empty embedding.");
+
+        long estimatedTokens = text.Length / 4;
+        AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.LlmTokenCounter.Add(estimatedTokens,
+            new KeyValuePair<string, object?>("model", _bedrockOptions.EmbeddingModelId),
+            new KeyValuePair<string, object?>("provider", "AWSBedrock"),
+            new KeyValuePair<string, object?>("type", "embedding"));
+
+        activity?.SetTag("llm.usage.total_tokens", estimatedTokens);
 
         return NormalizeEmbedding(embedding);
     }

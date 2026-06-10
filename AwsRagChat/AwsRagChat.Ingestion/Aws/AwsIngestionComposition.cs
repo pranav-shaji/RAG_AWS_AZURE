@@ -10,6 +10,7 @@ using AwsRagChat.Infrastructure.Persistence;
 using AwsRagChat.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using AwsRagChat.Infrastructure.Resilience;
 using InfrastructureDynamoDbOptions = AwsRagChat.Infrastructure.Options.DynamoDbOptions;
 using InfrastructureS3Options = AwsRagChat.Infrastructure.Options.S3Options;
@@ -18,8 +19,10 @@ namespace AwsRagChat.Ingestion.Aws;
 
 public static class AwsIngestionComposition
 {
-    public static AwsIngestionServices Create(IConfiguration configuration)
+    public static AwsIngestionServices Create(IConfiguration configuration, Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
     {
+        loggerFactory ??= Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
+
         var dynamoDbOptions = Microsoft.Extensions.Options.Options.Create(
             configuration.GetSection(DynamoDbOptions.SectionName).Get<DynamoDbOptions>() ?? new DynamoDbOptions());
 
@@ -98,20 +101,28 @@ public static class AwsIngestionComposition
 
         var chunkingService = new ChunkingService();
         var embeddingBatchService = new EmbeddingBatchService(bedrock, bedrockOptions, pipelineProvider);
-        var chunkRepository = new DynamoDbChunkRepository(dynamoDb, infrastructureDynamoDbOptions, pipelineProvider);
+        var chunkRepository = new DynamoDbChunkRepository(
+            dynamoDb, 
+            infrastructureDynamoDbOptions, 
+            pipelineProvider, 
+            loggerFactory.CreateLogger<DynamoDbChunkRepository>());
 
         var documentStatusService = new DocumentStatusService(
             dynamoDb,
             configuration["DynamoDb:DocumentsTableName"] ?? "rag-documents");
 
-        var openSearchService = new OpenSearchService(configuration, pipelineProvider);
+        var openSearchService = new OpenSearchService(
+            configuration, 
+            pipelineProvider, 
+            loggerFactory.CreateLogger<OpenSearchService>());
 
         var documentIngestionPipeline = new DocumentIngestionPipeline(
             chunkingService,
             embeddingBatchService,
             chunkRepository,
             documentStatusService,
-            openSearchService);
+            openSearchService,
+            loggerFactory.CreateLogger<DocumentIngestionPipeline>());
 
         _ = dynamoDbOptions;
 

@@ -60,6 +60,12 @@ public sealed class AzureOpenAiEmbeddingService : IEmbeddingProvider
         if (string.IsNullOrWhiteSpace(text))
             throw new ArgumentException("Text is required for embedding.", nameof(text));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "AzureOpenAi.GenerateEmbedding",
+            ActivityKind.Internal);
+        activity?.SetTag("llm.deployment", _options.EmbeddingDeploymentName);
+        activity?.SetTag("text.length", text.Length);
+
         var stopwatch = Stopwatch.StartNew();
         var response = await _resiliencePipeline.ExecuteAsync(
             async token => await _client.GenerateEmbeddingAsync(text, cancellationToken: token),
@@ -76,6 +82,14 @@ public sealed class AzureOpenAiEmbeddingService : IEmbeddingProvider
 
         if (embedding.Count == 0)
             throw new InvalidOperationException("Azure OpenAI returned an empty embedding.");
+
+        long estimatedTokens = text.Length / 4;
+        AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.LlmTokenCounter.Add(estimatedTokens,
+            new KeyValuePair<string, object?>("model", _options.EmbeddingDeploymentName),
+            new KeyValuePair<string, object?>("provider", "AzureOpenAI"),
+            new KeyValuePair<string, object?>("type", "embedding"));
+
+        activity?.SetTag("llm.usage.total_tokens", estimatedTokens);
 
         return NormalizeEmbedding(embedding);
     }

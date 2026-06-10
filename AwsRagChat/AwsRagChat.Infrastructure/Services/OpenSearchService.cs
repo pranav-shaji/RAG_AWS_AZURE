@@ -62,6 +62,20 @@ public sealed class OpenSearchService : IVectorStore
         if (chunk is null)
             throw new ArgumentNullException(nameof(chunk));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "OpenSearch.IndexDocument",
+            ActivityKind.Internal);
+        activity?.SetTag("search.index", _indexName);
+        if (chunk != null)
+        {
+            activity?.SetTag("document.id", chunk.DocumentId);
+            activity?.SetTag("chunk.id", chunk.ChunkId);
+        }
+
+        if (chunk is null)
+            throw new ArgumentNullException(nameof(chunk));
+
+
         if (string.IsNullOrWhiteSpace(chunk.OwnerUserId))
             throw new InvalidOperationException("Chunk OwnerUserId is required before indexing.");
 
@@ -95,11 +109,18 @@ public sealed class OpenSearchService : IVectorStore
             createdAtUtc = chunk.CreatedAtUtc
         };
 
+        var stopwatch = Stopwatch.StartNew();
         var response = await _resiliencePipeline.ExecuteAsync(async token =>
             await _client.IndexAsync(document, i => i
                 .Index(_indexName)
                 .Id($"{chunk.OwnerUserId}:{chunk.DocumentId}:{chunk.ChunkId}")
                 .Refresh(Refresh.WaitFor), token));
+        stopwatch.Stop();
+
+        AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+            stopwatch.ElapsedMilliseconds,
+            new KeyValuePair<string, object?>("operation", "IndexDocument"),
+            new KeyValuePair<string, object?>("database", "OpenSearch"));
 
         if (!response.IsValid)
             throw new InvalidOperationException($"Vector search indexing failed: {response.DebugInformation}");
@@ -124,6 +145,13 @@ public sealed class OpenSearchService : IVectorStore
     {
         if (string.IsNullOrWhiteSpace(ownerUserId))
             throw new ArgumentException("OwnerUserId is required.", nameof(ownerUserId));
+
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "OpenSearch.Search",
+            ActivityKind.Internal);
+        activity?.SetTag("search.index", _indexName);
+        activity?.SetTag("search.user", ownerUserId);
+        activity?.SetTag("search.topk", topK);
 
         if (queryEmbedding is null || queryEmbedding.Count == 0)
             throw new ArgumentException("Query embedding is required.", nameof(queryEmbedding));
@@ -235,6 +263,11 @@ public sealed class OpenSearchService : IVectorStore
                 token),
             cancellationToken);
         stopwatch.Stop();
+
+        AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+            stopwatch.ElapsedMilliseconds,
+            new KeyValuePair<string, object?>("operation", "Search"),
+            new KeyValuePair<string, object?>("database", "OpenSearch"));
 
         if (!response.Success)
             throw new InvalidOperationException($"Vector search kNN query failed: {response.DebugInformation}");

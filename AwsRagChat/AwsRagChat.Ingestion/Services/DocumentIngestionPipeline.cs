@@ -1,3 +1,9 @@
+using System;
+using System.Diagnostics;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Ingestion.Models;
 
@@ -11,33 +17,45 @@ public sealed class DocumentIngestionPipeline :
     private readonly IChunkRepository _chunkRepository;
     private readonly IDocumentStatusService _documentStatusService;
     private readonly IVectorStore _vectorStore;
+    private readonly ILogger<DocumentIngestionPipeline> _logger;
 
     public DocumentIngestionPipeline(
         ChunkingService chunkingService,
         IEmbeddingProvider embeddingProvider,
         IChunkRepository chunkRepository,
         IDocumentStatusService documentStatusService,
-        IVectorStore vectorStore)
+        IVectorStore vectorStore,
+        ILogger<DocumentIngestionPipeline> logger)
     {
         _chunkingService = chunkingService;
         _embeddingProvider = embeddingProvider;
         _chunkRepository = chunkRepository;
         _documentStatusService = documentStatusService;
         _vectorStore = vectorStore;
+        _logger = logger;
     }
 
     public async Task<IngestionPipelineResult> ProcessExtractedDocumentAsync(
         IngestionDocumentRequest request,
         ExtractedDocument extractedDocument,
-        Action<string>? log = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(extractedDocument);
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "DocumentIngestionPipeline.Process",
+            ActivityKind.Internal);
+
+        activity?.SetTag("document.id", request.DocumentId);
+        activity?.SetTag("owner.id", request.OwnerUserId);
+        activity?.SetTag("file.name", request.FileName);
+
+        var stopwatch = Stopwatch.StartNew();
+
         if (string.IsNullOrWhiteSpace(extractedDocument.FullText))
         {
-            log?.Invoke("No text extracted.");
+            _logger.LogWarning("No text extracted for document {DocumentId}.", request.DocumentId);
 
             await _documentStatusService.MarkFailedAsync(
                 request.DocumentId,
@@ -46,6 +64,10 @@ public sealed class DocumentIngestionPipeline :
                 request.ObjectKey,
                 request.EmptyTextErrorMessage,
                 cancellationToken);
+
+            AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.OcrJobCounter.Add(1, 
+                new KeyValuePair<string, object?>("status", "FailedNoText"),
+                new KeyValuePair<string, object?>("documentId", request.DocumentId));
 
             return new IngestionPipelineResult
             {
@@ -76,12 +98,17 @@ public sealed class DocumentIngestionPipeline :
             chunk.AllowedRoles = allowedRoles;
         }
 
-        log?.Invoke($"Created {chunks.Count} chunks.");
+        _logger.LogInformation("Created {ChunkCount} chunks for document {DocumentId}.", chunks.Count, request.DocumentId);
 
         foreach (var chunk in chunks.Take(5))
         {
-            log?.Invoke(
-                $"Chunk preview. Order: {chunk.ChunkOrder}, Page: {chunk.PageNumber}, Heading: {chunk.Heading}, Length: {chunk.Text.Length}, Text: {TrimForLog(chunk.Text, 260)}");
+            _logger.LogDebug(
+                "Chunk preview. Order: {ChunkOrder}, Page: {PageNumber}, Heading: {Heading}, Length: {Length}, Text: {Text}",
+                chunk.ChunkOrder,
+                chunk.PageNumber,
+                chunk.Heading,
+                chunk.Text.Length,
+                TrimForLog(chunk.Text, 260));
         }
 
         await _documentStatusService.MarkOcrCompletedAsync(
@@ -101,7 +128,7 @@ public sealed class DocumentIngestionPipeline :
             request.ObjectKey,
             cancellationToken);
 
-        log?.Invoke("Generating embeddings.");
+        _logger.LogInformation("Generating embeddings for {ChunkCount} chunks of document {DocumentId}.", chunks.Count, request.DocumentId);
 
         foreach (var chunk in chunks)
         {
@@ -113,10 +140,12 @@ public sealed class DocumentIngestionPipeline :
                 throw new InvalidOperationException($"Empty embedding generated for chunk {chunk.ChunkId}.");
         }
 
-        log?.Invoke(
-            $"Generated embeddings. ChunkCount: {chunks.Count}, Dimensions: {(chunks.Count > 0 ? chunks[0].Embedding.Count : 0)}");
+        _logger.LogInformation(
+            "Generated embeddings. ChunkCount: {ChunkCount}, Dimensions: {Dimensions}",
+            chunks.Count,
+            chunks.Count > 0 ? chunks[0].Embedding.Count : 0);
 
-        log?.Invoke("Persisting chunks to document store.");
+        _logger.LogInformation("Persisting {ChunkCount} chunks to document store for document {DocumentId}.", chunks.Count, request.DocumentId);
 
         await _chunkRepository.SaveChunksAsync(
             chunks,
@@ -129,12 +158,16 @@ public sealed class DocumentIngestionPipeline :
             request.ObjectKey,
             cancellationToken);
 
-        log?.Invoke("Indexing chunks into vector store.");
+        _logger.LogInformation("Indexing {ChunkCount} chunks into vector store for document {DocumentId}.", chunks.Count, request.DocumentId);
 
         foreach (var chunk in chunks)
         {
-            log?.Invoke(
-                $"Indexing chunk. DocumentId: {chunk.DocumentId}, ChunkId: {chunk.ChunkId}, OwnerUserId: {chunk.OwnerUserId}, TextLength: {chunk.Text?.Length ?? 0}");
+            _logger.LogDebug(
+                "Indexing chunk. DocumentId: {DocumentId}, ChunkId: {ChunkId}, OwnerUserId: {OwnerUserId}, TextLength: {TextLength}",
+                chunk.DocumentId,
+                chunk.ChunkId,
+                chunk.OwnerUserId,
+                chunk.Text?.Length ?? 0);
 
             await _vectorStore.IndexDocumentAsync(chunk);
         }
@@ -148,8 +181,23 @@ public sealed class DocumentIngestionPipeline :
             extractedDocument.PageCount,
             cancellationToken);
 
-        log?.Invoke(
-            $"SUCCESS: {chunks.Count} chunks across {extractedDocument.PageCount} pages processed and indexed for document {request.DocumentId}.");
+        stopwatch.Stop();
+        
+        AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.OcrDurationHistogram.Record(
+            stopwatch.ElapsedMilliseconds,
+            new KeyValuePair<string, object?>("operation", "IngestionPipeline"),
+            new KeyValuePair<string, object?>("documentId", request.DocumentId));
+
+        AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.OcrJobCounter.Add(1, 
+            new KeyValuePair<string, object?>("status", "Succeeded"),
+            new KeyValuePair<string, object?>("documentId", request.DocumentId));
+
+        _logger.LogInformation(
+            "SUCCESS: {ChunkCount} chunks across {PageCount} pages processed and indexed for document {DocumentId} in {ElapsedMs}ms.",
+            chunks.Count,
+            extractedDocument.PageCount,
+            request.DocumentId,
+            stopwatch.ElapsedMilliseconds);
 
         return new IngestionPipelineResult
         {

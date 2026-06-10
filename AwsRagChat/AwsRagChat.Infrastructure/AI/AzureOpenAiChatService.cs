@@ -130,6 +130,13 @@ public sealed class AzureOpenAiChatService : IChatProvider
         CancellationToken cancellationToken,
         params (string Name, string Value)[] dimensions)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "AzureOpenAi.CompleteChat",
+            ActivityKind.Internal);
+        
+        activity?.SetTag("llm.deployment", _options.ChatDeploymentName);
+        activity?.SetTag("llm.operation", operation);
+
         var options = new ChatCompletionOptions
         {
             MaxOutputTokenCount = operation == "KnowledgeOverview" ? 700 : 4096,
@@ -156,9 +163,30 @@ public sealed class AzureOpenAiChatService : IChatProvider
             string.Join(",", dimensions.Select(dimension => $"{dimension.Name}={dimension.Value}")));
 
         var chatCompletion = response?.Value;
-        if (chatCompletion?.Content != null)
+        if (chatCompletion != null)
         {
-            return chatCompletion.Content.ToString()!.Trim();
+            var usage = chatCompletion.Usage;
+            if (usage != null)
+            {
+                activity?.SetTag("llm.usage.input_tokens", usage.InputTokenCount);
+                activity?.SetTag("llm.usage.output_tokens", usage.OutputTokenCount);
+                activity?.SetTag("llm.usage.total_tokens", usage.TotalTokenCount);
+
+                AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.LlmTokenCounter.Add(usage.InputTokenCount,
+                    new KeyValuePair<string, object?>("model", _options.ChatDeploymentName),
+                    new KeyValuePair<string, object?>("provider", "AzureOpenAI"),
+                    new KeyValuePair<string, object?>("type", "input"));
+
+                AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.LlmTokenCounter.Add(usage.OutputTokenCount,
+                    new KeyValuePair<string, object?>("model", _options.ChatDeploymentName),
+                    new KeyValuePair<string, object?>("provider", "AzureOpenAI"),
+                    new KeyValuePair<string, object?>("type", "output"));
+            }
+
+            if (chatCompletion.Content != null)
+            {
+                return chatCompletion.Content.ToString()!.Trim();
+            }
         }
 
         throw new InvalidOperationException("Azure OpenAI returned an empty chat response.");

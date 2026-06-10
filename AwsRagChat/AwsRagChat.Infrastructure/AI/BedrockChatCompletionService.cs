@@ -135,6 +135,13 @@ public sealed class BedrockChatCompletionService : IChatProvider
         CancellationToken cancellationToken,
         params (string Name, string Value)[] dimensions)
     {
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "Bedrock.CompleteChat",
+            ActivityKind.Internal);
+
+        activity?.SetTag("llm.model", _bedrockOptions.ChatModelId);
+        activity?.SetTag("llm.operation", operation);
+
         var payload = new
         {
             messages = new[]
@@ -183,7 +190,38 @@ public sealed class BedrockChatCompletionService : IChatProvider
             string.Join(",", dimensions.Select(dimension => $"{dimension.Name}={dimension.Value}")));
 
         using var reader = new StreamReader(response.Body);
-        return await reader.ReadToEndAsync(cancellationToken);
+        var responseJson = await reader.ReadToEndAsync(cancellationToken);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(responseJson);
+            if (doc.RootElement.TryGetProperty("usage", out var usageElement))
+            {
+                var inputTokens = usageElement.TryGetProperty("inputTokens", out var inputVal) ? inputVal.GetInt64() : 0;
+                var outputTokens = usageElement.TryGetProperty("outputTokens", out var outputVal) ? outputVal.GetInt64() : 0;
+                var totalTokens = usageElement.TryGetProperty("totalTokens", out var totalVal) ? totalVal.GetInt64() : 0;
+
+                activity?.SetTag("llm.usage.input_tokens", inputTokens);
+                activity?.SetTag("llm.usage.output_tokens", outputTokens);
+                activity?.SetTag("llm.usage.total_tokens", totalTokens);
+
+                AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.LlmTokenCounter.Add(inputTokens,
+                    new KeyValuePair<string, object?>("model", _bedrockOptions.ChatModelId),
+                    new KeyValuePair<string, object?>("provider", "AWSBedrock"),
+                    new KeyValuePair<string, object?>("type", "input"));
+
+                AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.LlmTokenCounter.Add(outputTokens,
+                    new KeyValuePair<string, object?>("model", _bedrockOptions.ChatModelId),
+                    new KeyValuePair<string, object?>("provider", "AWSBedrock"),
+                    new KeyValuePair<string, object?>("type", "output"));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse Bedrock usage tokens.");
+        }
+
+        return responseJson;
     }
 
     private static bool TryReadNovaText(JsonElement root, out string answer)

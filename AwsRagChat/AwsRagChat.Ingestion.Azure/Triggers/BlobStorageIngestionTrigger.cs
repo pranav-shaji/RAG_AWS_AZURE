@@ -41,117 +41,137 @@ public class BlobStorageIngestionTrigger
         string fileName,
         FunctionContext context)
     {
-        _logger.LogInformation("Processing Blob trigger. Container: uploads, UserId: {userId}, DocumentId: {documentId}, FileName: {fileName}", userId, documentId, fileName);
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "BlobStorageIngestionTrigger",
+            System.Diagnostics.ActivityKind.Consumer);
 
-        var objectKey = $"uploads/{userId}/{documentId}/{fileName}";
+        activity?.SetTag("document.id", documentId);
+        activity?.SetTag("user.id", userId);
+        activity?.SetTag("file.name", fileName);
 
-        try
+        var correlationId = context.TraceContext?.TraceParent ?? Guid.NewGuid().ToString();
+        activity?.SetTag("correlation.id", correlationId);
+
+        using (_logger.BeginScope(new Dictionary<string, object>
         {
-            await _documentStatusService.MarkUploadedAsync(
-                documentId,
-                userId,
-                fileName,
-                objectKey,
-                CancellationToken.None);
+            ["CorrelationId"] = correlationId,
+            ["DocumentId"] = documentId,
+            ["OwnerUserId"] = userId
+        }))
+        {
+            _logger.LogInformation("Processing Blob trigger. Container: uploads, UserId: {userId}, DocumentId: {documentId}, FileName: {fileName}", userId, documentId, fileName);
 
-            await _documentStatusService.MarkProcessingAsync(
-                documentId,
-                userId,
-                fileName,
-                objectKey,
-                CancellationToken.None);
+            var objectKey = $"uploads/{userId}/{documentId}/{fileName}";
 
-            var processingResult = await _documentProcessor.ExtractAsync(
-                new DocumentProcessingRequest
-                {
-                    BucketOrContainerName = "uploads", // Since it is the trigger container
-                    ObjectKey = objectKey,
-                    FileName = fileName
-                },
-                CancellationToken.None);
-
-            if (processingResult.Status == DocumentProcessingStatus.OcrStarted)
+            try
             {
-                _logger.LogInformation("Fallback to Azure Document Intelligence async OCR. Started job: {jobId}", processingResult.OcrJobId);
-
-                await _documentStatusService.MarkOcrStartedAsync(
+                await _documentStatusService.MarkUploadedAsync(
                     documentId,
                     userId,
                     fileName,
                     objectKey,
-                    processingResult.OcrJobId!,
                     CancellationToken.None);
 
-                var ocrMessage = new OcrCompletionMessage
-                {
-                    DocumentId = documentId,
-                    OwnerUserId = userId,
-                    FileName = fileName,
-                    ObjectKey = objectKey,
-                    OcrJobId = processingResult.OcrJobId!
-                };
+                await _documentStatusService.MarkProcessingAsync(
+                    documentId,
+                    userId,
+                    fileName,
+                    objectKey,
+                    CancellationToken.None);
 
-                return new IngestionTriggerResult
-                {
-                    QueueMessage = JsonSerializer.Serialize(ocrMessage)
-                };
-            }
-
-            if (processingResult.Status == DocumentProcessingStatus.Unsupported)
-            {
-                throw new NotSupportedException(processingResult.Message ?? $"File type '{Path.GetExtension(fileName)}' is not supported.");
-            }
-
-            if (processingResult.Status == DocumentProcessingStatus.Failed)
-            {
-                throw new InvalidOperationException(processingResult.Message ?? "Document extraction failed.");
-            }
-
-            if (processingResult.ExtractedDocument == null)
-            {
-                throw new InvalidOperationException("No extracted document content was returned.");
-            }
-
-            var extracted = new AwsRagChat.Ingestion.Services.ExtractedDocument
-            {
-                FullText = processingResult.ExtractedDocument.FullText,
-                PageCount = processingResult.ExtractedDocument.PageCount,
-                Pages = processingResult.ExtractedDocument.Pages
-                    .Select(p => new ExtractedPage
+                var processingResult = await _documentProcessor.ExtractAsync(
+                    new DocumentProcessingRequest
                     {
-                        PageNumber = p.PageNumber,
-                        Text = p.Text
-                    })
-                    .ToList()
-            };
+                        BucketOrContainerName = "uploads", // Since it is the trigger container
+                        ObjectKey = objectKey,
+                        FileName = fileName
+                    },
+                    CancellationToken.None);
 
-            await _documentIngestionPipeline.ProcessExtractedDocumentAsync(
-                new IngestionDocumentRequest
+                if (processingResult.Status == DocumentProcessingStatus.OcrStarted)
                 {
-                    DocumentId = documentId,
-                    OwnerUserId = userId,
-                    FileName = fileName,
-                    ObjectKey = objectKey,
-                    EmptyTextErrorMessage = "No extractable text found."
-                },
-                extracted,
-                msg => _logger.LogInformation("{msg}", msg),
-                CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "ERROR during document ingestion: {message}", ex.Message);
+                    _logger.LogInformation("Fallback to Azure Document Intelligence async OCR. Started job: {jobId}", processingResult.OcrJobId);
 
-            await _documentStatusService.MarkFailedAsync(
-                documentId,
-                userId,
-                fileName,
-                objectKey,
-                ex.Message,
-                CancellationToken.None);
-        }
+                    await _documentStatusService.MarkOcrStartedAsync(
+                        documentId,
+                        userId,
+                        fileName,
+                        objectKey,
+                        processingResult.OcrJobId!,
+                        CancellationToken.None);
 
-        return null;
+                    var ocrMessage = new OcrCompletionMessage
+                    {
+                        DocumentId = documentId,
+                        OwnerUserId = userId,
+                        FileName = fileName,
+                        ObjectKey = objectKey,
+                        OcrJobId = processingResult.OcrJobId!,
+                        TraceParent = System.Diagnostics.Activity.Current?.Id ?? context.TraceContext?.TraceParent,
+                        CorrelationId = correlationId
+                    };
+
+                    return new IngestionTriggerResult
+                    {
+                        QueueMessage = JsonSerializer.Serialize(ocrMessage)
+                    };
+                }
+
+                if (processingResult.Status == DocumentProcessingStatus.Unsupported)
+                {
+                    throw new NotSupportedException(processingResult.Message ?? $"File type '{Path.GetExtension(fileName)}' is not supported.");
+                }
+
+                if (processingResult.Status == DocumentProcessingStatus.Failed)
+                {
+                    throw new InvalidOperationException(processingResult.Message ?? "Document extraction failed.");
+                }
+
+                if (processingResult.ExtractedDocument == null)
+                {
+                    throw new InvalidOperationException("No extracted document content was returned.");
+                }
+
+                var extracted = new AwsRagChat.Ingestion.Services.ExtractedDocument
+                {
+                    FullText = processingResult.ExtractedDocument.FullText,
+                    PageCount = processingResult.ExtractedDocument.PageCount,
+                    Pages = processingResult.ExtractedDocument.Pages
+                        .Select(p => new ExtractedPage
+                        {
+                            PageNumber = p.PageNumber,
+                            Text = p.Text
+                        })
+                        .ToList()
+                };
+
+                await _documentIngestionPipeline.ProcessExtractedDocumentAsync(
+                    new IngestionDocumentRequest
+                    {
+                        DocumentId = documentId,
+                        OwnerUserId = userId,
+                        FileName = fileName,
+                        ObjectKey = objectKey,
+                        EmptyTextErrorMessage = "No extractable text found."
+                    },
+                    extracted,
+                    CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "ERROR during document ingestion: {message}", ex.Message);
+
+                await _documentStatusService.MarkFailedAsync(
+                    documentId,
+                    userId,
+                    fileName,
+                    objectKey,
+                    ex.Message,
+                    CancellationToken.None);
+            }
+
+            return null;
+        }
     }
 }
 
@@ -168,4 +188,6 @@ public class OcrCompletionMessage
     public string FileName { get; set; } = string.Empty;
     public string ObjectKey { get; set; } = string.Empty;
     public string OcrJobId { get; set; } = string.Empty;
+    public string? TraceParent { get; set; }
+    public string? CorrelationId { get; set; }
 }

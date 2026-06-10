@@ -7,6 +7,7 @@ using Microsoft.Azure.Cosmos;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using AwsRagChat.Infrastructure.Resilience;
 using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Ingestion.Options;
@@ -26,8 +27,10 @@ namespace AwsRagChat.Ingestion.Azure;
 
 public static class AzureIngestionComposition
 {
-    public static AwsIngestionServices Create(IConfiguration configuration)
+    public static AwsIngestionServices Create(IConfiguration configuration, Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
     {
+        loggerFactory ??= Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
+
         // 1. Load options
         var storageOptions = new AzureStorageOptions();
         var storageSection = configuration.GetSection("Storage");
@@ -106,7 +109,10 @@ public static class AzureIngestionComposition
         var chunkRepository = new CosmosDbChunkRepository(cosmosClient, cosmosDbIOptions, pipelineProvider);
         var documentRepository = new CosmosDbDocumentRepository(cosmosClient, cosmosDbIOptions, pipelineProvider);
         var documentStatusService = new CosmosDbDocumentStatusService(cosmosClient, cosmosDbIOptions, pipelineProvider);
-        var openSearchService = new AzureAiSearchVectorStore(vectorStoreIOptions, Microsoft.Extensions.Logging.Abstractions.NullLogger<AzureAiSearchVectorStore>.Instance, pipelineProvider);
+        var openSearchService = new AzureAiSearchVectorStore(
+            vectorStoreIOptions, 
+            loggerFactory.CreateLogger<AzureAiSearchVectorStore>(), 
+            pipelineProvider);
 
         var textExtractionService = new TextExtractionService();
         var documentProcessor = new AzureDocumentProcessor(
@@ -119,7 +125,7 @@ public static class AzureIngestionComposition
         
         var embeddingProvider = new AzureOpenAiEmbeddingService(
             azureOpenAiIOptions,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<AzureOpenAiEmbeddingService>.Instance,
+            loggerFactory.CreateLogger<AzureOpenAiEmbeddingService>(),
             pipelineProvider);
 
         var documentIngestionPipeline = new DocumentIngestionPipeline(
@@ -127,7 +133,8 @@ public static class AzureIngestionComposition
             embeddingProvider,
             chunkRepository,
             documentStatusService,
-            openSearchService);
+            openSearchService,
+            loggerFactory.CreateLogger<DocumentIngestionPipeline>());
 
         return new AwsIngestionServices
         {

@@ -2,12 +2,17 @@ using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Azure.Identity;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
+using Azure.Monitor.OpenTelemetry.Exporter;
 using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Application.Models;
 using AwsRagChat.Ingestion.Azure;
 using AwsRagChat.Ingestion.Models;
 using AwsRagChat.Ingestion.Services;
+using AwsRagChat.Ingestion.Aws;
 using ExtractedDocument = AwsRagChat.Ingestion.Services.ExtractedDocument;
 
 var host = new HostBuilder()
@@ -40,12 +45,39 @@ var host = new HostBuilder()
     .ConfigureServices((hostContext, services) =>
     {
         var configuration = hostContext.Configuration;
-        var ingestionServices = AzureIngestionComposition.Create(configuration);
 
-        services.AddSingleton<IDocumentProcessor>(ingestionServices.DocumentProcessor);
-        services.AddSingleton<IDocumentStatusService>(ingestionServices.DocumentStatusService);
-        services.AddSingleton<IIngestionPipeline<IngestionDocumentRequest, ExtractedDocument, IngestionPipelineResult>>(
-            ingestionServices.DocumentIngestionPipeline);
+        // Register worker-level Application Insights
+        services.AddApplicationInsightsTelemetryWorkerService();
+        services.ConfigureFunctionsApplicationInsights();
+
+        // Configure OpenTelemetry to capture custom tracing and metrics, exporting to Azure Monitor
+        var appInsightsConnectionString = configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+        if (!string.IsNullOrWhiteSpace(appInsightsConnectionString))
+        {
+            services.AddOpenTelemetry()
+                .WithTracing(tracing =>
+                {
+                    tracing.AddSource("AwsRagChat")
+                           .AddAzureMonitorTraceExporter(o => o.ConnectionString = appInsightsConnectionString);
+                })
+                .WithMetrics(metrics =>
+                {
+                    metrics.AddMeter("AwsRagChat")
+                           .AddAzureMonitorMetricExporter(o => o.ConnectionString = appInsightsConnectionString);
+                });
+        }
+
+        services.AddSingleton<AwsIngestionServices>(sp =>
+        {
+            var conf = sp.GetRequiredService<IConfiguration>();
+            var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            return AzureIngestionComposition.Create(conf, loggerFactory);
+        });
+
+        services.AddSingleton<IDocumentProcessor>(sp => sp.GetRequiredService<AwsIngestionServices>().DocumentProcessor);
+        services.AddSingleton<IDocumentStatusService>(sp => sp.GetRequiredService<AwsIngestionServices>().DocumentStatusService);
+        services.AddSingleton<IIngestionPipeline<IngestionDocumentRequest, ExtractedDocument, IngestionPipelineResult>>(sp =>
+            sp.GetRequiredService<AwsIngestionServices>().DocumentIngestionPipeline);
     })
     .Build();
 

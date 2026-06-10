@@ -37,8 +37,6 @@ public class OcrCompletionQueueTrigger
         [QueueTrigger("ocr-completion-queue", Connection = "AzureWebJobsStorage")] string messageJson,
         FunctionContext context)
     {
-        _logger.LogInformation("Processing Queue trigger. Message: {message}", messageJson);
-
         OcrCompletionMessage? msg;
         try
         {
@@ -56,74 +54,102 @@ public class OcrCompletionQueueTrigger
             return;
         }
 
-        try
+        // Start Activity with traceparent if available
+        var parentContext = string.IsNullOrWhiteSpace(msg.TraceParent) 
+            ? default 
+            : System.Diagnostics.ActivityContext.Parse(msg.TraceParent, null);
+
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "OcrCompletionQueueTrigger",
+            System.Diagnostics.ActivityKind.Consumer,
+            parentContext);
+
+        activity?.SetTag("document.id", msg.DocumentId);
+        activity?.SetTag("user.id", msg.OwnerUserId);
+        activity?.SetTag("file.name", msg.FileName);
+        activity?.SetTag("ocr.job.id", msg.OcrJobId);
+        
+        var correlationId = msg.CorrelationId ?? msg.TraceParent ?? Guid.NewGuid().ToString();
+        activity?.SetTag("correlation.id", correlationId);
+
+        using (_logger.BeginScope(new Dictionary<string, object>
         {
-            var processingResult = await _documentProcessor.GetCompletedOcrResultAsync(
-                new CompletedOcrRequest
-                {
-                    OcrJobId = msg.OcrJobId,
-                    BucketOrContainerName = "uploads",
-                    ObjectKey = msg.ObjectKey,
-                    FileName = msg.FileName
-                },
-                CancellationToken.None);
+            ["CorrelationId"] = correlationId,
+            ["DocumentId"] = msg.DocumentId,
+            ["OwnerUserId"] = msg.OwnerUserId,
+            ["OcrJobId"] = msg.OcrJobId
+        }))
+        {
+            _logger.LogInformation("Processing Queue trigger. Message: {message}", messageJson);
 
-            if (processingResult.Status == DocumentProcessingStatus.Failed)
+            try
             {
-                throw new InvalidOperationException(processingResult.Message ?? "OCR retrieval failed.");
-            }
-
-            if (processingResult.ExtractedDocument == null)
-            {
-                throw new InvalidOperationException("No OCR extracted document content was returned.");
-            }
-
-            var extracted = new AwsRagChat.Ingestion.Services.ExtractedDocument
-            {
-                FullText = processingResult.ExtractedDocument.FullText,
-                PageCount = processingResult.ExtractedDocument.PageCount,
-                Pages = processingResult.ExtractedDocument.Pages
-                    .Select(p => new ExtractedPage
+                var processingResult = await _documentProcessor.GetCompletedOcrResultAsync(
+                    new CompletedOcrRequest
                     {
-                        PageNumber = p.PageNumber,
-                        Text = p.Text
-                    })
-                    .ToList()
-            };
+                        OcrJobId = msg.OcrJobId,
+                        BucketOrContainerName = "uploads",
+                        ObjectKey = msg.ObjectKey,
+                        FileName = msg.FileName
+                    },
+                    CancellationToken.None);
 
-            await _documentIngestionPipeline.ProcessExtractedDocumentAsync(
-                new IngestionDocumentRequest
+                if (processingResult.Status == DocumentProcessingStatus.Failed)
                 {
-                    DocumentId = msg.DocumentId,
-                    OwnerUserId = msg.OwnerUserId,
-                    FileName = msg.FileName,
-                    ObjectKey = msg.ObjectKey,
-                    OcrJobId = msg.OcrJobId,
-                    EmptyTextErrorMessage = "No extractable text found after Azure Document Intelligence OCR."
-                },
-                extracted,
-                logMsg => _logger.LogInformation("{msg}", logMsg),
-                CancellationToken.None);
-        }
-        catch (Exception ex) when (ex.Message.Contains("Status: running", StringComparison.OrdinalIgnoreCase) || 
-                                 ex.Message.Contains("Status: notStarted", StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogInformation("Azure Document Intelligence job {jobId} is still running. Retrying via queue visibility...", msg.OcrJobId);
-            throw; // Re-throw to keep message on queue and trigger retry back-off.
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Azure Document Intelligence job {jobId} failed permanently: {message}", msg.OcrJobId, ex.Message);
+                    throw new InvalidOperationException(processingResult.Message ?? "OCR retrieval failed.");
+                }
 
-            await _documentStatusService.MarkFailedAsync(
-                msg.DocumentId,
-                msg.OwnerUserId,
-                msg.FileName,
-                msg.ObjectKey,
-                ex.Message,
-                CancellationToken.None);
-            
-            // Do not re-throw, completing execution and deleting message from queue.
+                if (processingResult.ExtractedDocument == null)
+                {
+                    throw new InvalidOperationException("No OCR extracted document content was returned.");
+                }
+
+                var extracted = new AwsRagChat.Ingestion.Services.ExtractedDocument
+                {
+                    FullText = processingResult.ExtractedDocument.FullText,
+                    PageCount = processingResult.ExtractedDocument.PageCount,
+                    Pages = processingResult.ExtractedDocument.Pages
+                        .Select(p => new ExtractedPage
+                        {
+                            PageNumber = p.PageNumber,
+                            Text = p.Text
+                        })
+                        .ToList()
+                };
+
+                await _documentIngestionPipeline.ProcessExtractedDocumentAsync(
+                    new IngestionDocumentRequest
+                    {
+                        DocumentId = msg.DocumentId,
+                        OwnerUserId = msg.OwnerUserId,
+                        FileName = msg.FileName,
+                        ObjectKey = msg.ObjectKey,
+                        OcrJobId = msg.OcrJobId,
+                        EmptyTextErrorMessage = "No extractable text found after Azure Document Intelligence OCR."
+                    },
+                    extracted,
+                    CancellationToken.None);
+            }
+            catch (Exception ex) when (ex.Message.Contains("Status: running", StringComparison.OrdinalIgnoreCase) || 
+                                     ex.Message.Contains("Status: notStarted", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogInformation("Azure Document Intelligence job {jobId} is still running. Retrying via queue visibility...", msg.OcrJobId);
+                throw; // Re-throw to keep message on queue and trigger retry back-off.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Azure Document Intelligence job {jobId} failed permanently: {message}", msg.OcrJobId, ex.Message);
+
+                await _documentStatusService.MarkFailedAsync(
+                    msg.DocumentId,
+                    msg.OwnerUserId,
+                    msg.FileName,
+                    msg.ObjectKey,
+                    ex.Message,
+                    CancellationToken.None);
+                
+                // Do not re-throw, completing execution and deleting message from queue.
+            }
         }
     }
 }

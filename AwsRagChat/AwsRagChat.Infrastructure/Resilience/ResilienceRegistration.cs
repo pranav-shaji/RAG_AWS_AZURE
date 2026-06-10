@@ -4,6 +4,7 @@ using Polly.Retry;
 using Polly.CircuitBreaker;
 using Polly.Timeout;
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.IO;
 using System.Net.Sockets;
@@ -22,26 +23,50 @@ namespace AwsRagChat.Infrastructure.Resilience;
 
 public static class ResilienceRegistration
 {
+    private static RetryStrategyOptions CreateRetryOptions(
+        string pipelineName,
+        PredicateBuilder<object> shouldHandle,
+        int maxAttempts,
+        TimeSpan delay,
+        DelayBackoffType backoffType = DelayBackoffType.Exponential,
+        bool useJitter = true)
+    {
+        return new RetryStrategyOptions
+        {
+            ShouldHandle = shouldHandle,
+            BackoffType = backoffType,
+            UseJitter = useJitter,
+            MaxRetryAttempts = maxAttempts,
+            Delay = delay,
+            OnRetry = args =>
+            {
+                AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.PollyRetryCounter.Add(1,
+                    new KeyValuePair<string, object?>("pipeline", pipelineName),
+                    new KeyValuePair<string, object?>("attempt", args.AttemptNumber),
+                    new KeyValuePair<string, object?>("exception", args.Outcome.Exception?.GetType().Name ?? "Unknown"));
+                return default;
+            }
+        };
+    }
+
     public static IServiceCollection AddCustomResiliencePipelines(this IServiceCollection services)
     {
         // 1. AWS Bedrock Chat Pipeline
         services.AddResiliencePipeline("BedrockChatPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(45));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<AmazonServiceException>(ex =>
+            builder.AddRetry(CreateRetryOptions(
+                "BedrockChatPipeline",
+                new PredicateBuilder().Handle<AmazonServiceException>(ex =>
                     ex.StatusCode == HttpStatusCode.TooManyRequests ||
                     ex.StatusCode == HttpStatusCode.InternalServerError ||
                     ex.StatusCode == HttpStatusCode.ServiceUnavailable ||
                     ex.StatusCode == HttpStatusCode.GatewayTimeout)
                     .Handle<AmazonClientException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromSeconds(1)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromSeconds(1)
+            ));
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder().Handle<AmazonServiceException>(ex =>
@@ -61,20 +86,18 @@ public static class ResilienceRegistration
         services.AddResiliencePipeline("BedrockEmbedPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(15));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<AmazonServiceException>(ex =>
+            builder.AddRetry(CreateRetryOptions(
+                "BedrockEmbedPipeline",
+                new PredicateBuilder().Handle<AmazonServiceException>(ex =>
                     ex.StatusCode == HttpStatusCode.TooManyRequests ||
                     ex.StatusCode == HttpStatusCode.InternalServerError ||
                     ex.StatusCode == HttpStatusCode.ServiceUnavailable ||
                     ex.StatusCode == HttpStatusCode.GatewayTimeout)
                     .Handle<AmazonClientException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromSeconds(1)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromSeconds(1)
+            ));
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder().Handle<AmazonServiceException>(ex =>
@@ -94,16 +117,14 @@ public static class ResilienceRegistration
         services.AddResiliencePipeline("AzureOpenAiChatPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(45));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<ClientResultException>(ex =>
+            builder.AddRetry(CreateRetryOptions(
+                "AzureOpenAiChatPipeline",
+                new PredicateBuilder().Handle<ClientResultException>(ex =>
                     ex.Status == 429 || ex.Status >= 500)
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromSeconds(1)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromSeconds(1)
+            ));
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder().Handle<ClientResultException>(ex =>
@@ -119,16 +140,14 @@ public static class ResilienceRegistration
         services.AddResiliencePipeline("AzureOpenAiEmbedPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(15));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<ClientResultException>(ex =>
+            builder.AddRetry(CreateRetryOptions(
+                "AzureOpenAiEmbedPipeline",
+                new PredicateBuilder().Handle<ClientResultException>(ex =>
                     ex.Status == 429 || ex.Status >= 500)
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromSeconds(1)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromSeconds(1)
+            ));
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder().Handle<ClientResultException>(ex =>
@@ -144,19 +163,17 @@ public static class ResilienceRegistration
         services.AddResiliencePipeline("OpenSearchPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(10));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<OpenSearchClientException>()
+            builder.AddRetry(CreateRetryOptions(
+                "OpenSearchPipeline",
+                new PredicateBuilder().Handle<OpenSearchClientException>()
                     .Handle<UnexpectedOpenSearchClientException>()
                     .Handle<SocketException>()
                     .Handle<IOException>()
                     .Handle<WebException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromMilliseconds(800)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromMilliseconds(800)
+            ));
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder().Handle<OpenSearchClientException>()
@@ -175,18 +192,16 @@ public static class ResilienceRegistration
         services.AddResiliencePipeline("AzureAiSearchPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(10));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<RequestFailedException>(ex =>
+            builder.AddRetry(CreateRetryOptions(
+                "AzureAiSearchPipeline",
+                new PredicateBuilder().Handle<RequestFailedException>(ex =>
                     ex.Status == 429 || ex.Status >= 500)
                     .Handle<SocketException>()
                     .Handle<IOException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromMilliseconds(800)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromMilliseconds(800)
+            ));
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder().Handle<RequestFailedException>(ex =>
@@ -204,9 +219,9 @@ public static class ResilienceRegistration
         services.AddResiliencePipeline("DynamoDbPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(5));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<ProvisionedThroughputExceededException>()
+            builder.AddRetry(CreateRetryOptions(
+                "DynamoDbPipeline",
+                new PredicateBuilder().Handle<ProvisionedThroughputExceededException>()
                     .Handle<Amazon.DynamoDBv2.Model.LimitExceededException>()
                     .Handle<AmazonServiceException>(ex =>
                         ex.StatusCode == HttpStatusCode.TooManyRequests ||
@@ -214,21 +229,19 @@ public static class ResilienceRegistration
                         ex.StatusCode == HttpStatusCode.ServiceUnavailable)
                     .Handle<AmazonClientException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 4,
-                Delay = TimeSpan.FromMilliseconds(500)
-            });
+                maxAttempts: 4,
+                delay: TimeSpan.FromMilliseconds(500)
+            ));
         });
 
         // 8. Cosmos DB Pipeline (No Circuit Breakers)
         services.AddResiliencePipeline("CosmosDbPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(5));
-            builder.AddRetry(new RetryStrategyOptions
-            {
+            builder.AddRetry(CreateRetryOptions(
+                "CosmosDbPipeline",
                 // Handles only failures escaping the SDK rate-limit retry layer
-                ShouldHandle = new PredicateBuilder().Handle<Microsoft.Azure.Cosmos.CosmosException>(ex =>
+                new PredicateBuilder().Handle<Microsoft.Azure.Cosmos.CosmosException>(ex =>
                     ex.StatusCode == HttpStatusCode.TooManyRequests ||
                     ex.StatusCode == HttpStatusCode.ServiceUnavailable ||
                     ex.StatusCode == HttpStatusCode.RequestTimeout ||
@@ -236,30 +249,26 @@ public static class ResilienceRegistration
                     .Handle<SocketException>()
                     .Handle<IOException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 4,
-                Delay = TimeSpan.FromMilliseconds(500)
-            });
+                maxAttempts: 4,
+                delay: TimeSpan.FromMilliseconds(500)
+            ));
         });
 
         // 9. AWS Cognito Pipeline
         services.AddResiliencePipeline("CognitoPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(5));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<TooManyRequestsException>()
+            builder.AddRetry(CreateRetryOptions(
+                "CognitoPipeline",
+                new PredicateBuilder().Handle<TooManyRequestsException>()
                     .Handle<AmazonServiceException>(ex =>
                         ex.StatusCode == HttpStatusCode.TooManyRequests ||
                         ex.StatusCode == HttpStatusCode.InternalServerError)
                     .Handle<AmazonClientException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromMilliseconds(500)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromMilliseconds(500)
+            ));
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder().Handle<TooManyRequestsException>()
@@ -277,20 +286,18 @@ public static class ResilienceRegistration
         services.AddResiliencePipeline("GraphPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(5));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<ODataError>(ex =>
+            builder.AddRetry(CreateRetryOptions(
+                "GraphPipeline",
+                new PredicateBuilder().Handle<ODataError>(ex =>
                     ex.ResponseStatusCode == 429 ||
                     ex.ResponseStatusCode == 503 ||
                     ex.ResponseStatusCode == 504)
                     .Handle<SocketException>()
                     .Handle<IOException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromMilliseconds(500)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromMilliseconds(500)
+            ));
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder().Handle<ODataError>(ex =>
@@ -310,15 +317,16 @@ public static class ResilienceRegistration
         services.AddResiliencePipeline("RedisPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(1));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<RedisConnectionException>()
+            builder.AddRetry(CreateRetryOptions(
+                "RedisPipeline",
+                new PredicateBuilder().Handle<RedisConnectionException>()
                     .Handle<RedisTimeoutException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Constant,
-                MaxRetryAttempts = 2,
-                Delay = TimeSpan.FromMilliseconds(100)
-            });
+                maxAttempts: 2,
+                delay: TimeSpan.FromMilliseconds(100),
+                backoffType: DelayBackoffType.Constant,
+                useJitter: false
+            ));
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder().Handle<RedisConnectionException>()
@@ -334,57 +342,51 @@ public static class ResilienceRegistration
         services.AddResiliencePipeline("S3Pipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(30));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<AmazonS3Exception>(ex =>
+            builder.AddRetry(CreateRetryOptions(
+                "S3Pipeline",
+                new PredicateBuilder().Handle<AmazonS3Exception>(ex =>
                     ex.StatusCode == HttpStatusCode.InternalServerError ||
                     ex.StatusCode == HttpStatusCode.ServiceUnavailable ||
                     ex.StatusCode == HttpStatusCode.GatewayTimeout)
                     .Handle<AmazonClientException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromMilliseconds(500)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromMilliseconds(500)
+            ));
         });
 
         // 13. Blob Storage Pipeline
         services.AddResiliencePipeline("BlobStoragePipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(30));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<RequestFailedException>(ex =>
+            builder.AddRetry(CreateRetryOptions(
+                "BlobStoragePipeline",
+                new PredicateBuilder().Handle<RequestFailedException>(ex =>
                     ex.Status == 500 || ex.Status == 503 || ex.Status == 504)
                     .Handle<SocketException>()
                     .Handle<IOException>()
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromMilliseconds(500)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromMilliseconds(500)
+            ));
         });
 
         // 14. Document Processing (OCR) Pipeline
         services.AddResiliencePipeline("OcrPipeline", builder =>
         {
             builder.AddTimeout(TimeSpan.FromSeconds(60));
-            builder.AddRetry(new RetryStrategyOptions
-            {
-                ShouldHandle = new PredicateBuilder().Handle<AmazonServiceException>(ex =>
+            builder.AddRetry(CreateRetryOptions(
+                "OcrPipeline",
+                new PredicateBuilder().Handle<AmazonServiceException>(ex =>
                     ex.StatusCode == HttpStatusCode.TooManyRequests ||
                     ex.StatusCode == HttpStatusCode.InternalServerError ||
                     ex.StatusCode == HttpStatusCode.ServiceUnavailable)
                     .Handle<RequestFailedException>(ex =>
                         ex.Status == 429 || ex.Status >= 500)
                     .Handle<TimeoutException>(),
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                MaxRetryAttempts = 3,
-                Delay = TimeSpan.FromSeconds(2)
-            });
+                maxAttempts: 3,
+                delay: TimeSpan.FromSeconds(2)
+            ));
             builder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
             {
                 ShouldHandle = new PredicateBuilder().Handle<AmazonServiceException>(ex =>

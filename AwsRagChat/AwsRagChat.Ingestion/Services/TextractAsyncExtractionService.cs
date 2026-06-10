@@ -1,4 +1,4 @@
-﻿using Amazon.Textract;
+using Amazon.Textract;
 using Amazon.Textract.Model;
 using AwsRagChat.Ingestion.Options;
 using Microsoft.Extensions.Options;
@@ -36,6 +36,12 @@ public sealed class TextractAsyncExtractionService
         if (string.IsNullOrWhiteSpace(_textractAsyncOptions.TextractPublishRoleArn))
             throw new InvalidOperationException("Textract publish role ARN is not configured.");
 
+        var jobTag = System.Diagnostics.Activity.Current?.Id ?? _textractAsyncOptions.JobTag;
+        if (!string.IsNullOrEmpty(jobTag) && jobTag.Length > 64)
+        {
+            jobTag = jobTag[..64];
+        }
+
         var request = new StartDocumentTextDetectionRequest
         {
             DocumentLocation = new DocumentLocation
@@ -51,7 +57,7 @@ public sealed class TextractAsyncExtractionService
                 RoleArn = _textractAsyncOptions.TextractPublishRoleArn,
                 SNSTopicArn = _textractAsyncOptions.SnsTopicArn
             },
-            JobTag = _textractAsyncOptions.JobTag
+            JobTag = jobTag
         };
 
         var response = await _amazonTextract.StartDocumentTextDetectionAsync(request, cancellationToken);

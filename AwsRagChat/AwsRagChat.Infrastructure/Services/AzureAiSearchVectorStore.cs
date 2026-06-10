@@ -143,6 +143,20 @@ public sealed class AzureAiSearchVectorStore : IVectorStore
         if (chunk is null)
             throw new ArgumentNullException(nameof(chunk));
 
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "AzureAiSearch.IndexDocument",
+            ActivityKind.Internal);
+        activity?.SetTag("search.index", _options.IndexName);
+        if (chunk != null)
+        {
+            activity?.SetTag("document.id", chunk.DocumentId);
+            activity?.SetTag("chunk.id", chunk.ChunkId);
+        }
+
+        if (chunk is null)
+            throw new ArgumentNullException(nameof(chunk));
+
+
         if (string.IsNullOrWhiteSpace(chunk.OwnerUserId))
             throw new InvalidOperationException("Chunk OwnerUserId is required before indexing.");
 
@@ -182,8 +196,15 @@ public sealed class AzureAiSearchVectorStore : IVectorStore
             ["createdAtUtc"] = chunk.CreatedAtUtc
         };
 
+        var stopwatch = Stopwatch.StartNew();
         var response = await _resiliencePipeline.ExecuteAsync(
             async token => await _searchClient.UploadDocumentsAsync(new[] { document }, cancellationToken: token));
+        stopwatch.Stop();
+
+        AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+            stopwatch.ElapsedMilliseconds,
+            new KeyValuePair<string, object?>("operation", "IndexDocument"),
+            new KeyValuePair<string, object?>("database", "AzureAiSearch"));
 
         if (response.Value.Results.Any(r => !r.Succeeded))
         {
@@ -212,6 +233,13 @@ public sealed class AzureAiSearchVectorStore : IVectorStore
     {
         if (string.IsNullOrWhiteSpace(ownerUserId))
             throw new ArgumentException("OwnerUserId is required.", nameof(ownerUserId));
+
+        using var activity = AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.Source.StartActivity(
+            "AzureAiSearch.Search",
+            ActivityKind.Internal);
+        activity?.SetTag("search.index", _options.IndexName);
+        activity?.SetTag("search.user", ownerUserId);
+        activity?.SetTag("search.topk", topK);
 
         if (queryEmbedding is null || queryEmbedding.Count == 0)
             throw new ArgumentException("Query embedding is required.", nameof(queryEmbedding));
@@ -311,6 +339,11 @@ public sealed class AzureAiSearchVectorStore : IVectorStore
                 CreatedAtUtc = GetDateTime(doc, "createdAtUtc")
             });
         }
+
+        AwsRagChat.Infrastructure.Telemetry.ApplicationTelemetry.DbLatencyHistogram.Record(
+            stopwatch.ElapsedMilliseconds,
+            new KeyValuePair<string, object?>("operation", "Search"),
+            new KeyValuePair<string, object?>("database", "AzureAiSearch"));
 
         _logger.LogInformation(
             "Azure AI Search completed. Index={IndexName}, UserId={OwnerUserId}, Role={CurrentUserRole}, DocumentId={DocumentId}, SharedAdminScope={SharedAdminScope}, SharedDocumentCount={SharedDocumentCount}, ResultCount={ResultCount}, DurationMs={DurationMs}",

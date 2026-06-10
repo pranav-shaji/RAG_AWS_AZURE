@@ -6,6 +6,9 @@ using AwsRagChat.Application.Interfaces;
 using AwsRagChat.Infrastructure.CloudProviders;
 using Amazon.Extensions.Configuration.SystemsManager;
 using Azure.Identity;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
+using Azure.Monitor.OpenTelemetry.Exporter;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -42,8 +45,64 @@ else if (string.Equals(cloudProvider, "Azure", StringComparison.OrdinalIgnoreCas
 }
 
 builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
+if (string.Equals(cloudProvider, "AWS", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Logging.AddJsonConsole(options =>
+    {
+        options.IncludeScopes = true;
+        options.TimestampFormat = "yyyy-MM-ddTHH:mm:ssZ ";
+        options.JsonWriterOptions = new System.Text.Json.JsonWriterOptions { Indented = false };
+    });
+}
+else
+{
+    builder.Logging.AddConsole();
+}
 builder.Logging.AddDebug();
+
+// Configure OpenTelemetry for tracing and metrics
+var otelBuilder = builder.Services.AddOpenTelemetry();
+
+otelBuilder.WithTracing(tracing =>
+{
+    tracing.AddSource("AwsRagChat")
+           .AddAspNetCoreInstrumentation()
+           .AddHttpClientInstrumentation();
+
+    if (string.Equals(cloudProvider, "Azure", StringComparison.OrdinalIgnoreCase))
+    {
+        var connString = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+        if (!string.IsNullOrEmpty(connString))
+        {
+            tracing.AddAzureMonitorTraceExporter(o => o.ConnectionString = connString);
+        }
+    }
+    else
+    {
+        tracing.AddOtlpExporter();
+    }
+});
+
+otelBuilder.WithMetrics(metrics =>
+{
+    metrics.AddMeter("AwsRagChat")
+           .AddAspNetCoreInstrumentation()
+           .AddHttpClientInstrumentation();
+
+    if (string.Equals(cloudProvider, "Azure", StringComparison.OrdinalIgnoreCase))
+    {
+        var connString = builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"];
+        if (!string.IsNullOrEmpty(connString))
+        {
+            metrics.AddAzureMonitorMetricExporter(o => o.ConnectionString = connString);
+        }
+    }
+    else
+    {
+        metrics.AddOtlpExporter();
+    }
+});
+
 
 var allowedOrigins = builder.Configuration
     .GetSection("Cors:AllowedOrigins")
@@ -152,6 +211,8 @@ app.UseForwardedHeaders();
 app.UseHttpsRedirection();
 
 app.UseCors("ConfiguredCors");
+
+app.UseMiddleware<AwsRagChat.Api.Middleware.CorrelationIdMiddleware>();
 
 if (app.Environment.IsDevelopment() || swaggerEnabled)
 {
